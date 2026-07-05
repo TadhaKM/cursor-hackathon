@@ -150,6 +150,38 @@ Response (illustrative — section text abbreviated; shape is exact):
 > `word_count`/`char_count` are computed server-side and every section is kept
 > within the validated 100–250 word range.
 
+### `POST /quiz` (comprehension check)
+
+Generate 4 multiple-choice questions from an architecture summary — for an
+interactive check after the onboarding video.
+
+Body:
+
+```jsonc
+{
+  "architecture_summary": "## Overview\nTodoAPI is a REST service..."
+}
+```
+
+Response:
+
+```jsonc
+{
+  "questions": [
+    {
+      "question": "Where is JWT token verification handled?",
+      "options": ["src/server.js", "src/middleware/auth.js", "src/routes/todos.js", "src/db/index.js"],
+      "correct_index": 1
+    }
+  ],
+  "meta": { "model": "gemini-2.5-flash", "elapsed_ms": 3200 }
+}
+```
+
+Each question has exactly 4 options and a `correct_index` of 0–3. Questions
+reference specific details from the summary, not generic trivia. Malformed model
+output triggers one strict retry before returning an error.
+
 ### `POST /chat` (stretch: RAG chat)
 
 Ask questions about the repo. The service chunks `key_files`, retrieves the most

@@ -3,6 +3,7 @@ import cors from "cors";
 import { config, assertApiKey } from "./config.js";
 import { explainRepo } from "./explain.js";
 import { answerQuestion } from "./rag.js";
+import { generateQuiz } from "./quiz.js";
 
 const app = express();
 app.use(cors());
@@ -80,6 +81,35 @@ app.post("/explain", async (req, res) => {
     });
   } catch (err) {
     sendError(res, "/explain", err);
+  }
+});
+
+// Comprehension check after the video — 4 MCQs from the architecture summary.
+// Body: { "architecture_summary": string }
+app.post("/quiz", async (req, res) => {
+  try {
+    assertApiKey();
+  } catch (err) {
+    return res.status(500).json({ error: err.message, kind: "config" });
+  }
+
+  const body = req.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return res.status(400).json({
+      error: 'Request body must be a JSON object with an "architecture_summary" field.',
+      kind: "bad_request",
+    });
+  }
+
+  const started = Date.now();
+  try {
+    const quiz = await generateQuiz(body.architecture_summary);
+    res.json({
+      questions: quiz.questions,
+      meta: { model: config.model, elapsed_ms: Date.now() - started },
+    });
+  } catch (err) {
+    sendError(res, "/quiz", err);
   }
 });
 
