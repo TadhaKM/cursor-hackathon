@@ -188,10 +188,10 @@ export function chatBackend(): "gemini" | "explain" | "mock" {
 // Synthetic "ingestion" payload for the tool-level FAQ assistant (no repo
 // has been processed yet, or the question isn't about a specific repo).
 export const TOOL_DOCS: IngestResult = {
-  repo_url: "repo-to-video",
+  repo_url: "redio",
   file_tree: "",
   readme: [
-    "# repo → video",
+    "# Redio",
     "",
     "A tool that turns a public GitHub repo into a short onboarding walkthrough video.",
     "",

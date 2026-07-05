@@ -255,7 +255,7 @@ function AskBuilder({ repoIngestion, repoName }: { repoIngestion?: IngestResult;
               ingestion={repoIngestion ?? TOOL_DOCS}
               contextType={repoIngestion ? "repo" : "tool"}
               placeholder={
-                repoIngestion ? "Ask about this codebase…" : "Ask how repo → video works…"
+                repoIngestion ? "Ask about this codebase…" : "Ask how Redio works…"
               }
               hint={chatHint(!!repoIngestion)}
             />
@@ -609,7 +609,7 @@ const FAQ_ITEMS: { cat: FaqCategory; q: string; a: string }[] = [
   {
     cat: "chat",
     q: "Does the chat use the same context as the video?",
-    a: "On the results page, yes — chat is grounded in the same ingested repo files the explainer used. The floating \"?\" button on other pages answers general questions about how repo → video works.",
+    a: "On the results page, yes — chat is grounded in the same ingested repo files the explainer used. The floating \"?\" button on other pages answers general questions about how Redio works.",
   },
   {
     cat: "limits",
@@ -784,7 +784,7 @@ function ChangelogPage() {
             <span className="terminal-dot terminal-dot-del" />
             <span className="terminal-dot terminal-dot-add" />
             <span className="terminal-dot terminal-dot-pop" />
-            <span className="changelog-terminal-label">git log --oneline repo-to-video</span>
+            <span className="changelog-terminal-label">git log --oneline redio</span>
           </div>
           <div className="changelog-filters" role="tablist" aria-label="Filter by version">
             {versions.map((v) => (
@@ -1056,7 +1056,7 @@ function App() {
   return (
     <div className="shell">
       <header className="topbar">
-        <span className="topbar-brand">repo → video</span>
+        <span className="topbar-brand">Redio</span>
         <nav className="nav-links">
           <button className={`nav-link ${page === "app" ? "nav-link-active" : ""}`} onClick={() => setPage("app")}>
             App
