@@ -1,0 +1,19 @@
+{
+  "name": "repo-ingest",
+  "version": "1.0.0",
+  "description": "Ingest a GitHub repository into a compact, token-budgeted JSON summary via the GitHub REST API.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@octokit/rest": "^20.1.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}

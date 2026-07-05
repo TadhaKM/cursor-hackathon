@@ -1,0 +1,20 @@
+# Node
+node_modules/
+dist/
+*.log
+
+# Env (never commit real keys)
+.env
+.env.local
+.env.*.local
+
+# Python (video-renderer)
+.venv/
+__pycache__/
+*.pyc
+
+# Generated diagram images
+video-renderer/static/*.png
+
+# OS
+.DS_Store

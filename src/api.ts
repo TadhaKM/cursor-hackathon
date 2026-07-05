@@ -43,7 +43,9 @@ export interface ExplainResult {
 export interface VideoSection {
   title: string;
   video_url: string | null;
-  status: "processing" | "ready" | "failed";
+  // Matches Person 3's per-section VideoStatus (models.py): the backend emits
+  // "completed", not "ready" — "ready" is only the job-level status.
+  status: "processing" | "completed" | "failed";
 }
 
 export interface RenderResult {
@@ -97,10 +99,14 @@ export async function runPipeline(
   );
   onStage({ stage: "explain", ok: true });
 
-  // 3. Render — kick off async job, then poll
+  // 3. Render — kick off async job, then poll. Forward the mermaid diagram so
+  // Person 3 can render it to an image (the UI shows diagram_image_url).
   const kickoff = await postJSON<RenderResult>(
     `${RENDER_URL}/render`,
-    { sections: explainRes.narration_script.sections },
+    {
+      sections: explainRes.narration_script.sections,
+      mermaid_diagram: explainRes.mermaid_diagram,
+    },
     signal
   );
 
@@ -230,7 +236,7 @@ async function runMockPipeline(
     videos: MOCK_SECTIONS.map((s) => ({
       title: s.title,
       video_url: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
-      status: "ready" as const,
+      status: "completed" as const,
     })),
     diagramImageUrl: null,
   };

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: repo-ingest
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: CACHE_TTL_MS
+        value: "600000"
