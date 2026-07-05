@@ -1,0 +1,56 @@
+:root {
+  --bg: #efe9dc;
+  --panel: #fffdf8;
+  --ink: #14171f;
+  --border: #14171f;
+  --text-dim: #5a5c66;
+  --text-faint: #8c8d95;
+  --add: #2f8f4e;
+  --add-tint: #d9efdd;
+  --del: #c1443a;
+  --del-tint: #f6dcda;
+  --pop: #ff5b2e;
+  --pop-tint: #ffe4d6;
+  --info: #3e5fd9;
+  --display: "Space Grotesk", ui-sans-serif, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --sans: "Inter", -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid var(--info);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

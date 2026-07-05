@@ -1,0 +1,370 @@
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  height: 58px;
+  border-bottom: 2.5px solid var(--border);
+  background: var(--panel);
+}
+
+.tabs {
+  display: flex;
+  height: 100%;
+}
+
+.tab {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  padding: 0 18px;
+  border-right: 2px solid var(--border);
+  height: 100%;
+}
+
+.tab-active {
+  color: var(--ink);
+  background: var(--bg);
+  font-weight: 700;
+  box-shadow: inset 0 -3px 0 var(--pop);
+}
+
+.topbar-brand {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+.stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+}
+
+.panel {
+  width: 100%;
+  max-width: 720px;
+  background: var(--panel);
+  border: 2.5px solid var(--border);
+  border-radius: 14px;
+  padding: 52px 52px 44px;
+  box-shadow: 10px 10px 0 var(--border);
+}
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--add);
+  margin: 0 0 18px;
+  font-weight: 700;
+}
+
+.eyebrow-error {
+  color: var(--del);
+}
+
+h1 {
+  font-family: var(--display);
+  font-size: 46px;
+  font-weight: 700;
+  margin: 0 0 18px;
+  line-height: 1.08;
+  letter-spacing: -0.015em;
+}
+
+h2 {
+  font-family: var(--display);
+  font-size: 30px;
+  font-weight: 700;
+  margin: 0 0 18px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+h3 {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 26px 0 10px;
+}
+
+.lede {
+  color: var(--text-dim);
+  font-size: 17px;
+  line-height: 1.6;
+  margin: 0 0 32px;
+  max-width: 48ch;
+}
+
+.input-row {
+  display: flex;
+  align-items: center;
+  background: var(--bg);
+  border: 2.5px solid var(--border);
+  border-radius: 10px;
+  padding: 0 6px 0 20px;
+  margin-bottom: 26px;
+}
+
+.input-prefix {
+  font-family: var(--mono);
+  color: var(--pop);
+  font-size: 15px;
+  font-weight: 700;
+  margin-right: 12px;
+  user-select: none;
+}
+
+.input-row input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 16px;
+  padding: 17px 8px;
+}
+
+.input-row input::placeholder {
+  color: var(--text-faint);
+}
+
+.input-row input:focus-visible {
+  outline: none;
+}
+
+.input-row:focus-within {
+  box-shadow: 4px 4px 0 var(--border);
+}
+
+.actions {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 700;
+  padding: 15px 24px;
+  border-radius: 9px;
+  border: 2.5px solid var(--border);
+  cursor: pointer;
+  box-shadow: 5px 5px 0 var(--border);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+.btn:active {
+  transform: translate(3px, 3px);
+  box-shadow: 2px 2px 0 var(--border);
+}
+
+.btn-primary {
+  background: var(--pop);
+  color: #1a0c05;
+}
+
+.btn-ghost {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+/* ---- progress: git-graph ---- */
+
+.progress-title {
+  color: var(--ink);
+}
+
+.graph {
+  margin-top: 26px;
+}
+
+.graph-row {
+  display: flex;
+  gap: 20px;
+}
+
+.graph-line-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 26px;
+}
+
+.node {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 800;
+  z-index: 1;
+}
+
+.node-pending {
+  border-color: var(--border);
+  opacity: 0.4;
+}
+
+.node-active {
+  border-color: var(--info);
+  background: #e7ecfc;
+  box-shadow: 0 0 0 6px rgba(62, 95, 217, 0.15);
+  animation: pulse 1.3s ease-in-out infinite;
+}
+
+.node-done {
+  border-color: var(--add);
+  background: var(--add-tint);
+  color: var(--add);
+}
+
+.node-failed {
+  border-color: var(--del);
+  background: var(--del-tint);
+  color: var(--del);
+}
+
+.line {
+  width: 3px;
+  flex: 1;
+  min-height: 34px;
+  background: var(--border);
+  opacity: 0.25;
+}
+
+.line-done {
+  background: var(--add);
+  opacity: 1;
+}
+
+.graph-label-col {
+  padding-bottom: 30px;
+  padding-top: 3px;
+  display: flex;
+  flex-direction: column;
+}
+
+.graph-hash {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text-faint);
+  font-weight: 500;
+}
+
+.hash-done {
+  color: var(--add);
+}
+
+.graph-label {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-top: 2px;
+}
+
+.graph-status {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--info);
+  margin-top: 5px;
+  font-weight: 700;
+}
+
+.graph-status-error {
+  color: var(--del);
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 6px rgba(62, 95, 217, 0.15); }
+  50% { box-shadow: 0 0 0 10px rgba(62, 95, 217, 0.08); }
+}
+
+/* ---- result ---- */
+
+.result-panel {
+  max-width: 900px;
+}
+
+.result-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 32px;
+  margin-top: 8px;
+}
+
+.video {
+  width: 100%;
+  border-radius: 10px;
+  border: 2.5px solid var(--border);
+  background: #000;
+  display: block;
+  box-shadow: 6px 6px 0 var(--border);
+}
+
+.summary-text {
+  color: var(--text-dim);
+  font-size: 15.5px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.diagram-block {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--info);
+  background: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  margin: 0;
+  white-space: pre;
+}
+
+.result-panel .actions {
+  margin-top: 32px;
+}
+
+/* ---- error ---- */
+
+.error-panel h2 {
+  color: var(--del);
+}
+
+@media (max-width: 640px) {
+  .panel {
+    padding: 32px 24px;
+    box-shadow: 6px 6px 0 var(--border);
+  }
+  h1 {
+    font-size: 30px;
+  }
+  .result-grid {
+    grid-template-columns: 1fr;
+  }
+  .tab {
+    padding: 0 10px;
+    font-size: 11px;
+  }
+}
