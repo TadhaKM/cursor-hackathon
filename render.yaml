@@ -1,0 +1,50 @@
+# Render Blueprint — deploys all three backend services.
+# In Render: New + → Blueprint → pick this repo. Set the `sync: false` secrets
+# (GITHUB_TOKEN, GEMINI_API_KEY, HEYGEN_API_KEY) in each service's dashboard.
+# The frontend deploys separately on Vercel (see DEPLOY.md).
+services:
+  - type: web
+    name: repo-ingest
+    runtime: node
+    plan: free
+    rootDir: repo-ingest
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: CACHE_TTL_MS
+        value: "600000"
+
+  - type: web
+    name: repo-explainer
+    runtime: node
+    plan: free
+    rootDir: services/repo-explainer
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_TIMEOUT_MS
+        value: "90000"
+
+  - type: web
+    name: video-renderer
+    runtime: python
+    plan: free
+    rootDir: video-renderer
+    buildCommand: pip install -r requirements.txt
+    # Render provides $PORT; bind to it and 0.0.0.0.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: HEYGEN_API_KEY
+        sync: false
+      - key: HEYGEN_AVATAR_ID
+        value: Anna_public_3_20240108
+      - key: HEYGEN_VOICE_ID
+        value: 6458ca9a09ba411b9487dfe105dd05dc
+      # PUBLIC_BASE_URL is auto-derived from Render's RENDER_EXTERNAL_URL
+      # (see app/config.py), so no need to set it by hand.

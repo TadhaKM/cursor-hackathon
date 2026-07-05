@@ -21,7 +21,7 @@ interface ChatRequestBody {
 }
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
 
 const MAX_CONTEXT_CHARS = 48_000;
@@ -126,7 +126,7 @@ function systemPrompt(contextType: "repo" | "tool"): string {
 }
 
 async function callGemini(system: string, userPrompt: string): Promise<string> {
-  const url = `https://generativeai.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
   const res = await fetch(url, {
     method: "POST",
