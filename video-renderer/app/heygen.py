@@ -28,13 +28,20 @@ def _headers() -> dict:
     return {"X-Api-Key": config.HEYGEN_API_KEY, "Content-Type": "application/json"}
 
 
-async def submit_video(script: str, client: httpx.AsyncClient) -> str:
-    """Submit one HeyGen video generation job, return its video_id."""
-    if not config.HEYGEN_AVATAR_ID or not config.HEYGEN_VOICE_ID:
-        raise HeyGenError(
-            "HEYGEN_AVATAR_ID and HEYGEN_VOICE_ID must be set — pick IDs from "
-            "GET /avatars and GET /voices first."
-        )
+async def submit_video(script: str, client: httpx.AsyncClient, voice_id: str | None = None) -> str:
+    """Submit one HeyGen video generation job, return its video_id.
+
+    voice_id overrides config.HEYGEN_VOICE_ID when set — used for the
+    cloned-voice mode (see clone_voice_from_base64/poll_voice_clone below):
+    a cloned voice's ID works as a normal HeyGen voice_id in this same
+    text-to-speech path, no separate audio-track plumbing needed.
+    """
+    if not config.HEYGEN_AVATAR_ID:
+        raise HeyGenError("HEYGEN_AVATAR_ID must be set — pick one from GET /avatars first.")
+
+    resolved_voice_id = voice_id or config.HEYGEN_VOICE_ID
+    if not resolved_voice_id:
+        raise HeyGenError("HEYGEN_VOICE_ID must be set — pick one from GET /voices first.")
 
     payload = {
         "video_inputs": [
@@ -47,7 +54,7 @@ async def submit_video(script: str, client: httpx.AsyncClient) -> str:
                 "voice": {
                     "type": "text",
                     "input_text": script,
-                    "voice_id": config.HEYGEN_VOICE_ID,
+                    "voice_id": resolved_voice_id,
                 },
                 "background": {"type": "color", "value": "#0b0b0f"},
             }
@@ -115,11 +122,13 @@ async def poll_until_done(video_id: str, client: httpx.AsyncClient) -> dict:
         await asyncio.sleep(interval)
 
 
-async def render_section(title: str, script: str, client: httpx.AsyncClient) -> dict:
+async def render_section(
+    title: str, script: str, client: httpx.AsyncClient, voice_id: str | None = None
+) -> dict:
     """Submit + poll one section, with one retry if the render fails."""
     for attempt in range(2):
         try:
-            video_id = await submit_video(script, client)
+            video_id = await submit_video(script, client, voice_id=voice_id)
             result = await poll_until_done(video_id, client)
         except HeyGenError as exc:
             result = {"status": "failed", "video_url": None, "error": str(exc)}
@@ -127,6 +136,65 @@ async def render_section(title: str, script: str, client: httpx.AsyncClient) -> 
         if result["status"] == "completed" or attempt == 1:
             return {"title": title, **result}
     return {"title": title, **result}
+
+
+async def clone_voice_from_base64(
+    voice_name: str, media_type: str, base64_data: str, client: httpx.AsyncClient
+) -> str:
+    """Submit a HeyGen native voice clone (POST /v3/voices/clone). Returns a
+    voice_clone_id — poll it with poll_voice_clone until it's ready.
+
+    Confirmed against HeyGen's actual v3 docs (developers.heygen.com/reference/
+    clone-a-voice) and tested live: a real call with a bogus audio URL
+    returned 200 (not the documented 403 "plan upgrade required"), so this
+    account's plan does allow it. Real cost per clone is still unconfirmed —
+    HeyGen's pricing page lists a flat $1.00 per Digital Twin API call, but
+    it's not confirmed whether that figure also applies to this endpoint.
+    """
+    payload = {
+        "voice_name": voice_name,
+        "audio": {"type": "base64", "media_type": media_type, "data": base64_data},
+    }
+    resp = await client.post(
+        f"{config.HEYGEN_BASE_URL}/v3/voices/clone",
+        headers=_headers(),
+        json=payload,
+        timeout=30,
+    )
+    if resp.status_code == 403:
+        raise HeyGenError("Voice cloning requires a HeyGen plan upgrade (403).")
+    if resp.status_code >= 400:
+        raise HeyGenError(f"HeyGen voice clone failed ({resp.status_code}): {resp.text}")
+
+    voice_clone_id = resp.json().get("data", {}).get("voice_clone_id")
+    if not voice_clone_id:
+        raise HeyGenError(f"HeyGen clone response missing voice_clone_id: {resp.text}")
+    return voice_clone_id
+
+
+async def poll_voice_clone(voice_clone_id: str, client: httpx.AsyncClient) -> str:
+    """Poll a HeyGen voice clone job until it's ready. Returns the voice_id
+    (same value as voice_clone_id, per HeyGen's response) once complete."""
+    start = time.monotonic()
+    while True:
+        resp = await client.get(
+            f"{config.HEYGEN_BASE_URL}/v3/voices/{voice_clone_id}",
+            headers=_headers(),
+            timeout=15,
+        )
+        if resp.status_code >= 400:
+            raise HeyGenError(f"HeyGen voice clone status check failed ({resp.status_code}): {resp.text}")
+
+        data = resp.json().get("data", {})
+        status = data.get("status")
+        if status == "complete":
+            return data.get("voice_id", voice_clone_id)
+        if status == "failed":
+            raise HeyGenError(f"HeyGen voice clone failed: {data.get('failure_message')}")
+
+        if time.monotonic() - start >= config.VOICE_CLONE_MAX_WAIT_S:
+            raise HeyGenError("Timed out waiting for HeyGen voice clone to complete.")
+        await asyncio.sleep(config.VOICE_CLONE_POLL_INTERVAL_S)
 
 
 async def list_avatars(client: httpx.AsyncClient) -> list:

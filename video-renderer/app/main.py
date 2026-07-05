@@ -1,8 +1,9 @@
 import asyncio
+import base64
 import uuid
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -66,6 +67,38 @@ async def voices():
         return await heygen.list_voices(client)
 
 
+@app.post("/voice/clone")
+async def clone_voice(file: UploadFile = File(...), name: str = Form("Cloned Voice")):
+    """Clone a voice from a ~30-60s audio sample using HeyGen's own native
+    voice cloning (POST /v3/voices/clone) — not ElevenLabs, which isn't
+    available for this hackathon. Returns { voice_id } once the clone
+    finishes processing (polled synchronously, up to
+    config.VOICE_CLONE_MAX_WAIT_S) — pass it as `voice_id` on POST /render
+    to narrate sections in the cloned voice instead of HeyGen's default.
+
+    NOTE: this endpoint is confirmed working against the current HeyGen
+    account (a real test call returned 200, not the documented 403 "plan
+    upgrade required"), but the actual per-clone cost is NOT confirmed —
+    HeyGen's pricing page lists $1.00 per Digital Twin API call, a related
+    but distinct product; whether that price also applies here is unverified.
+    Held back from the default pipeline pending cost confirmation.
+    """
+    if not config.HEYGEN_API_KEY:
+        raise HTTPException(400, "HEYGEN_API_KEY not set")
+
+    audio_bytes = await file.read()
+    media_type = file.content_type or "audio/wav"
+    base64_data = base64.b64encode(audio_bytes).decode("ascii")
+
+    async with httpx.AsyncClient() as client:
+        try:
+            voice_clone_id = await heygen.clone_voice_from_base64(name, media_type, base64_data, client)
+            voice_id = await heygen.poll_voice_clone(voice_clone_id, client)
+        except heygen.HeyGenError as exc:
+            raise HTTPException(502, str(exc))
+    return {"voice_id": voice_id}
+
+
 async def _run_job(job_id: str, req: RenderRequest) -> None:
     try:
         await _run_job_inner(job_id, req)
@@ -86,7 +119,11 @@ async def _run_job_inner(job_id: str, req: RenderRequest) -> None:
     async with httpx.AsyncClient() as client:
         # Submit/poll every section in parallel — don't wait on one before
         # starting the next, since HeyGen renders take 1-3 min each.
-        render_tasks = [heygen.render_section(s.title, s.script, client) for s in req.sections]
+        # req.voice_id (a HeyGen cloned voice, see /voice/clone) overrides the
+        # default HEYGEN_VOICE_ID for every section when provided.
+        render_tasks = [
+            heygen.render_section(s.title, s.script, client, voice_id=req.voice_id) for s in req.sections
+        ]
 
         diagram_task = (
             diagram.render_mermaid_to_png(req.mermaid_diagram, client)

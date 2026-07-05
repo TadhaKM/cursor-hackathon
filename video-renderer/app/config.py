@@ -19,3 +19,8 @@ POLL_FAST_INTERVAL_S = 5
 POLL_FAST_WINDOW_S = 30
 POLL_SLOW_INTERVAL_S = 15
 POLL_MAX_WAIT_S = 300
+
+# HeyGen native voice cloning (POST /v3/voices/clone) polling — cloning is
+# much faster than a full video render, so this is a short, tight loop.
+VOICE_CLONE_POLL_INTERVAL_S = 3
+VOICE_CLONE_MAX_WAIT_S = 120

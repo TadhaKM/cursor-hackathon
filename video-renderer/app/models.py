@@ -14,6 +14,11 @@ class Section(BaseModel):
 class RenderRequest(BaseModel):
     sections: list[Section]
     mermaid_diagram: Optional[str] = None
+    # Optional HeyGen cloned-voice ID (from POST /voice/clone). If set, every
+    # section is narrated in that voice instead of HEYGEN_VOICE_ID — this is
+    # a normal HeyGen voice_id once cloning completes, so it flows through
+    # the existing text-to-speech path with no other change.
+    voice_id: Optional[str] = None
 
 
 class VideoState(BaseModel):
