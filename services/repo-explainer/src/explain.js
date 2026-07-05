@@ -71,7 +71,7 @@ function stripFences(text) {
 }
 
 // Pull every node id actually defined in the diagram (the short id before a
-// [ ] / ( ) / { } label) so we can reject any id Qwen hallucinates in the
+// [ ] / ( ) / { } label) so we can reject any id the model hallucinates in the
 // highlight-mapping step below.
 function extractNodeIds(mermaidDiagram) {
   const ids = new Set();

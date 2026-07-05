@@ -304,7 +304,7 @@ function mockAnswer(_ingestion: IngestResult, question: string): Promise<ChatAns
 }
 
 // Bridges repo-explainer's per-section node_ids (grounded in the actual
-// narration, via a dedicated Qwen/Gemini call) into DiagramPanel's
+// narration, via a dedicated Gemini call) into DiagramPanel's
 // DiagramHighlight[] shape, which otherwise only ever gets populated by
 // resolveDiagramHighlights()'s client-side title-matching heuristic.
 // DiagramHighlight is one node per section; a section with multiple
