@@ -82,6 +82,18 @@ async def voices():
         return await heygen.list_voices(client)
 
 
+# Public domain sample clip returned for every section in mock mode.
+MOCK_VIDEO_URL = (
+    "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
+)
+
+
+async def _mock_render_section(title: str) -> dict:
+    """Instant stand-in for heygen.render_section — no HeyGen call, no credits."""
+    await asyncio.sleep(2)
+    return {"title": title, "status": "completed", "video_url": MOCK_VIDEO_URL, "error": None}
+
+
 async def _run_job(job_id: str, req: RenderRequest) -> None:
     try:
         await _run_job_inner(job_id, req)
@@ -101,8 +113,12 @@ async def _run_job_inner(job_id: str, req: RenderRequest) -> None:
 
     async with httpx.AsyncClient() as client:
         # Submit/poll every section in parallel — don't wait on one before
-        # starting the next, since HeyGen renders take 1-3 min each.
-        render_tasks = [heygen.render_section(s.title, s.script, client) for s in req.sections]
+        # starting the next, since HeyGen renders take 1-3 min each. In mock
+        # mode, skip HeyGen and return instant placeholder videos.
+        if config.MOCK_VIDEO:
+            render_tasks = [_mock_render_section(s.title) for s in req.sections]
+        else:
+            render_tasks = [heygen.render_section(s.title, s.script, client) for s in req.sections]
 
         diagram_task = (
             diagram.render_mermaid_to_png(req.mermaid_diagram, client)

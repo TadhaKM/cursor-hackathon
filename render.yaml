@@ -44,6 +44,10 @@ services:
       # try (and fail) to build from source with Rust on Render's read-only FS.
       - key: PYTHON_VERSION
         value: "3.12.7"
+      # Mock mode: skip HeyGen and return instant placeholder videos. Set to
+      # "false" once the HeyGen account has API credits for real renders.
+      - key: MOCK_VIDEO
+        value: "true"
       - key: HEYGEN_API_KEY
         sync: false
       - key: HEYGEN_AVATAR_ID
