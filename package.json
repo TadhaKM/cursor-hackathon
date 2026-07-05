@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "marked": "^18.0.5",
+    "mermaid": "^11.4.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

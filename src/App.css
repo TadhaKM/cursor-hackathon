@@ -2396,6 +2396,35 @@ h3 {
   color: var(--text-faint);
 }
 
+/* Client-rendered mermaid diagram (real SVG, not a flat image) — lets
+   individual nodes be highlighted per section, which a PNG can't do. */
+.mermaid-diagram svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.mermaid-diagram-error {
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: var(--text-mono-xs);
+  color: var(--text-faint);
+}
+/* The node(s) the currently-playing section discusses. */
+.diagram-node-active rect,
+.diagram-node-active polygon,
+.diagram-node-active circle,
+.diagram-node-active path {
+  stroke: var(--pop) !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 6px var(--pop));
+}
+.diagram-caption {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: var(--text-mono-xs);
+  color: var(--text-faint);
+}
+
 /* Floating "Diagram" button — available at any point on the results screen. */
 .diagram-fab {
   position: fixed;
@@ -2487,7 +2516,8 @@ h3 {
   justify-content: center;
   align-items: flex-start;
 }
-.diagram-modal-body img {
+.diagram-modal-body img,
+.diagram-modal-body .diagram-modal-svg svg {
   max-width: 100%;
   height: auto;
   display: block;
@@ -2495,7 +2525,8 @@ h3 {
 .diagram-modal-body-zoom {
   align-items: flex-start;
 }
-.diagram-modal-body-zoom img {
+.diagram-modal-body-zoom img,
+.diagram-modal-body-zoom .diagram-modal-svg svg {
   max-width: none;
   width: auto;
   cursor: grab;

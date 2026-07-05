@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { marked } from "marked";
+import mermaid from "mermaid";
 import {
   runPipeline,
   backendMode,
@@ -1318,10 +1319,105 @@ function splitSentences(text: string): string[] {
   return cleaned.length ? cleaned : [text];
 }
 
+let mermaidInitialized = false;
+function ensureMermaidInit() {
+  if (mermaidInitialized) return;
+  mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
+  mermaidInitialized = true;
+}
+
+let mermaidRenderSeq = 0;
+
+// Renders mermaid source client-side (as real SVG, not a flat image) so
+// individual nodes can be highlighted per section — a rasterized PNG can't
+// do this. Falls back to nothing (parent shows the PNG instead) if the
+// client-side mermaid parser rejects the source.
+//
+// NOTE: node highlighting depends on mermaid's own DOM id convention for
+// flowchart nodes (`flowchart-<nodeId>-<n>`), which is not officially a
+// stable public API — verified against mermaid ^11.4 at the time this was
+// written, but confirm visually if upgrading the mermaid dependency.
+function MermaidDiagram({
+  source,
+  highlightIds = [],
+  className,
+}: {
+  source: string;
+  highlightIds?: string[];
+  className?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [renderedFor, setRenderedFor] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    ensureMermaidInit();
+    let cancelled = false;
+    setError(null);
+    const id = `mermaid-diagram-${++mermaidRenderSeq}`;
+    mermaid
+      .render(id, source)
+      .then(({ svg }) => {
+        if (cancelled) return;
+        if (containerRef.current) containerRef.current.innerHTML = svg;
+        setRenderedFor(source);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Failed to render diagram");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
+  // Highlight the active section's node(s). Runs after the SVG for the
+  // *current* source has actually landed in the DOM (renderedFor === source
+  // guards against highlighting a stale, about-to-be-replaced render).
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || renderedFor !== source) return;
+    container.querySelectorAll(".node").forEach((node) => {
+      node.classList.remove("diagram-node-active");
+    });
+    for (const id of highlightIds) {
+      container
+        .querySelectorAll(`[id^="flowchart-${CSS.escape(id)}-"]`)
+        .forEach((el) => el.classList.add("diagram-node-active"));
+    }
+  }, [highlightIds, renderedFor, source]);
+
+  if (error) {
+    return (
+      <div className={`mermaid-diagram mermaid-diagram-error ${className ?? ""}`}>
+        Diagram couldn't render ({error}).
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className={`mermaid-diagram ${className ?? ""}`}
+      aria-label="Architecture diagram"
+    />
+  );
+}
+
 // Full-screen, click-to-zoom architecture-diagram viewer. Reachable at any
 // point via the floating "Diagram" button, the toolbar, the thumbnail, and the
 // picture-in-picture overlay. Esc or a backdrop click closes it.
-function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
+function DiagramModal({
+  imageUrl,
+  mermaidSource,
+  highlightIds,
+  onClose,
+}: {
+  imageUrl: string | null;
+  mermaidSource?: string | null;
+  highlightIds?: string[];
+  onClose: () => void;
+}) {
   const [zoom, setZoom] = useState(false);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1349,14 +1445,16 @@ function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
             >
               {zoom ? "Fit" : "Zoom"}
             </button>
-            <a
-              className="diagram-modal-btn"
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open ↗
-            </a>
+            {imageUrl && (
+              <a
+                className="diagram-modal-btn"
+                href={imageUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open ↗
+              </a>
+            )}
             <button
               className="diagram-modal-btn diagram-modal-close"
               onClick={onClose}
@@ -1370,7 +1468,15 @@ function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
         <div
           className={`diagram-modal-body ${zoom ? "diagram-modal-body-zoom" : ""}`}
         >
-          <img src={url} alt="Architecture diagram" />
+          {mermaidSource ? (
+            <MermaidDiagram
+              source={mermaidSource}
+              highlightIds={highlightIds}
+              className="diagram-modal-svg"
+            />
+          ) : (
+            <img src={imageUrl ?? ""} alt="Architecture diagram" />
+          )}
         </div>
       </div>
     </div>
@@ -1474,6 +1580,8 @@ function ResultView({
   const [pipDiagram, setPipDiagram] = useState(false);
   const [diagramOpen, setDiagramOpen] = useState(false);
   const sentences = section ? splitSentences(section.script) : [];
+  const hasDiagram = Boolean(result.mermaidDiagram || result.diagramImageUrl);
+  const activeNodeIds = section?.node_ids ?? [];
 
   // Reset caption + progress when the section (and its video) changes.
   useEffect(() => {
@@ -1603,14 +1711,22 @@ function ResultView({
               </div>
             )}
 
-            {video?.video_url && pipDiagram && result.diagramImageUrl && (
+            {video?.video_url && pipDiagram && hasDiagram && (
               <button
                 className="video-pip"
                 onClick={() => setDiagramOpen(true)}
                 type="button"
                 title="Click to enlarge the diagram"
               >
-                <img src={result.diagramImageUrl} alt="Architecture diagram" />
+                {result.mermaidDiagram ? (
+                  <MermaidDiagram
+                    source={result.mermaidDiagram}
+                    highlightIds={activeNodeIds}
+                    className="video-pip-diagram"
+                  />
+                ) : (
+                  <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
+                )}
               </button>
             )}
           </div>
@@ -1625,7 +1741,7 @@ function ResultView({
               >
                 CC · Subtitles {captionsOn ? "on" : "off"}
               </button>
-              {result.diagramImageUrl && (
+              {hasDiagram && (
                 <>
                   <button
                     className={`vtool ${pipDiagram ? "vtool-on" : ""}`}
@@ -1666,18 +1782,29 @@ function ResultView({
             </div>
           )}
 
-          {result.diagramImageUrl && (
+          {hasDiagram && (
             <button
               className="diagram-thumb"
               onClick={() => setDiagramOpen(true)}
               type="button"
               title="Click to view the architecture diagram"
             >
-              <img src={result.diagramImageUrl} alt="Architecture diagram" />
+              {result.mermaidDiagram ? (
+                <MermaidDiagram
+                  source={result.mermaidDiagram}
+                  highlightIds={activeNodeIds}
+                  className="diagram-thumb-svg"
+                />
+              ) : (
+                <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
+              )}
               <span className="diagram-thumb-hint">
                 ⛶ Architecture diagram — click to enlarge (viewable any time)
               </span>
             </button>
+          )}
+          {activeNodeIds.length > 0 && section?.caption && (
+            <p className="diagram-caption">📍 {section.caption}</p>
           )}
         </div>
 
@@ -1728,7 +1855,7 @@ function ResultView({
       </div>
 
       {/* Always-available diagram access, floating over the results screen. */}
-      {result.diagramImageUrl && (
+      {hasDiagram && (
         <button
           className="diagram-fab"
           onClick={() => setDiagramOpen(true)}
@@ -1738,9 +1865,11 @@ function ResultView({
           ◇ Diagram
         </button>
       )}
-      {diagramOpen && result.diagramImageUrl && (
+      {diagramOpen && hasDiagram && (
         <DiagramModal
-          url={result.diagramImageUrl}
+          imageUrl={result.diagramImageUrl}
+          mermaidSource={result.mermaidDiagram}
+          highlightIds={activeNodeIds}
           onClose={() => setDiagramOpen(false)}
         />
       )}
