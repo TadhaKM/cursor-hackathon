@@ -69,6 +69,23 @@ retrieves the most relevant ones for the question, and answers with Qwen
 - If `VITE_EXPLAIN_URL` isn't set, chat runs in **mock mode** like the rest
   of the pipeline — same pill pattern, no separate flag to manage.
 
+## Also new: transcript, shortcuts, history, and export
+
+- **Transcript panel** — the narration script for the active section is shown
+  next to its video on the results page (previously it was only ever spoken,
+  never displayed).
+- **Keyboard shortcuts** — `←`/`→` or `[`/`]` to move between result sections,
+  `Ctrl`/`Cmd`+`Enter` to send a chat message, and `?` to open a shortcuts
+  cheat-sheet (`Esc` closes any modal).
+- **Walkthrough history** — every completed run is saved to `localStorage`
+  (`src/history.ts`) so you can reopen a past walkthrough instantly from the
+  input screen without re-running the pipeline. Reopening also updates the
+  URL hash (`#walk/<id>`), so a "Copy link" on the results page gives you a
+  link that rehydrates that exact walkthrough on load.
+- **Export** — download the architecture summary + full narration script as
+  a `.md` file, or copy just the summary, both with toast confirmations
+  (`src/Toast.tsx`) instead of ad hoc button-text swaps.
+
 ## Deploy on Render
 
 1. New "Static Site" on Render, point at this repo/folder.
@@ -77,8 +94,12 @@ retrieves the most relevant ones for the question, and answers with Qwen
 4. Set the three `VITE_*_URL` env vars in the Render dashboard once the
    backend services are deployed. Leave unset to keep running in mock mode.
 
-See `render.yaml` at the repo root for the full 4-service Blueprint once
-all three backend folders exist.
+Each backend folder (`repo-ingest/`, `services/repo-explainer/`,
+`video-renderer/`) deploys as its own Render service — currently only
+`repo-ingest/render.yaml` exists. There's no root-level Blueprint tying all
+four services together yet; until one exists, deploy each service manually
+(or add per-service `render.yaml` files and a root Blueprint that references
+them).
 
 ## Demo notes
 
