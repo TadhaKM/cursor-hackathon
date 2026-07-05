@@ -1,5 +1,5 @@
 import { chat } from "./llmClient.js";
-import { normalizeIngestion, renderContext, hasUsableContent } from "./ingestion.js";
+import { normalizeIngestion, renderContext, hasUsableContent, hasRichCommitHistory } from "./ingestion.js";
 import { normalizeLanguage } from "./language.js";
 import {
   buildArchitectureMessages,
@@ -124,9 +124,10 @@ export async function explainRepo(payload = {}, opts = {}) {
   }
 
   const context = renderContext(norm);
+  const richHistory = hasRichCommitHistory(norm);
 
   // 1) Architecture summary.
-  const archMsgs = buildArchitectureMessages(context, persona);
+  const archMsgs = buildArchitectureMessages(context, persona, { richHistory });
   const architectureSummary = await chat({
     ...archMsgs,
     temperature: 0.4,
@@ -134,7 +135,9 @@ export async function explainRepo(payload = {}, opts = {}) {
   });
 
   // 2) Narration script (retries once via llmClient; parse can also fail).
-  const narrMsgs = buildNarrationMessages(architectureSummary, persona, language);
+  const narrMsgs = buildNarrationMessages(architectureSummary, persona, language, {
+    richHistory,
+  });
   const narrationRaw = await chat({
     ...narrMsgs,
     json: true,
@@ -160,5 +163,6 @@ export async function explainRepo(payload = {}, opts = {}) {
     mermaid_diagram: mermaidDiagram,
     persona,
     language,
+    rich_history: richHistory,
   };
 }

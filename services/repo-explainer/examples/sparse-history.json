@@ -1,0 +1,11 @@
+{
+  "persona": "new_grad",
+  "file_tree": ["src/index.js", "package.json"],
+  "readme": "# hello\n\nA tiny demo app.",
+  "key_files": [
+    { "path": "src/index.js", "content": "console.log('hello');" }
+  ],
+  "recent_commits": [
+    { "sha": "abc1234", "author": "Dev", "message": "init" }
+  ]
+}

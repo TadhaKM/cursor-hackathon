@@ -54,6 +54,7 @@ Body: the ingestion JSON, optionally with `persona` and `language` fields.
   "readme": "# TodoAPI ...",
   "key_files": [{ "path": "src/server.js", "content": "..." }],
   "recent_commits": [{ "sha": "a1b2c3d", "author": "Dana", "message": "Add auth" }],
+  "recent_pull_requests": [{ "number": 18, "title": "Extract JWT auth into middleware", "body": "..." }],
   "package_manifest": { "name": "todo-api", "dependencies": { "express": "^4" } },
   "persona": "new_grad",            // optional: "new_grad" | "senior_engineer"
   "language": "es"                   // optional: "en" | "es" | "zh" | "hi" (default "en")
@@ -69,8 +70,15 @@ right voice and accent.
 
 Field shapes are flexible: `file_tree` may be an array of paths or a string;
 `key_files` may be an array of `{path, content}` or a `{path: content}` map;
-`recent_commits` may be objects or plain strings. Both `snake_case` and
-`camelCase` keys are accepted.
+`recent_commits` may be objects or plain strings; `recent_pull_requests` (also
+`pull_requests`, `recent_prs`) may include PR titles and bodies. Both `snake_case`
+and `camelCase` keys are accepted.
+
+When commit/PR history is **rich** (3+ commits or any PR), the architecture
+summary prompt asks Gemini to explain *why* modules exist based on real commit
+messages and PR descriptions — not just what files are present. With sparse
+history (0–2 commits, no PRs), that instruction is skipped so the model won't
+hallucinate backstory.
 
 Response:
 
@@ -228,6 +236,7 @@ npm run smoke               # full pipeline against real Gemini (needs GEMINI_AP
 npm run smoke -- path/to/ingestion.json
 npm run quality             # narration quality pass over all fixtures (needs GEMINI_API_KEY)
 npm run language-test       # Spanish + Chinese sanity check on same mock repo (needs GEMINI_API_KEY)
+npm run history-test        # verify summary cites real commit/PR history (needs GEMINI_API_KEY)
 npm run language-test -- hi # test a specific language code
 ```
 
@@ -236,6 +245,8 @@ Fixtures for the quality pass live in `examples/`:
 - `sample-ingestion.json` — web app with JWT auth (Express + SQLite)
 - `cli-tool.json` — an image-resizing CLI tool
 - `data-pipeline.json` — a Kafka → Postgres ETL pipeline
+- `rich-history.json` — web app with detailed commits + PR bodies (for history grounding)
+- `sparse-history.json` — single "init" commit (history guidance disabled)
 
 `npm run quality` runs `/explain` against each and automatically flags the three
 narration failure modes: doc-like phrasing ("this module contains…"), narration

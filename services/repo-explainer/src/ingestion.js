@@ -8,6 +8,8 @@ const LIMITS = {
   keyFileChars: 3500, // per file
   keyFilesTotalChars: 20000,
   commits: 25,
+  pullRequests: 15,
+  prBodyChars: 500,
   manifestChars: 4000,
 };
 
@@ -76,15 +78,47 @@ function normalizeCommits(recentCommits) {
   if (!recentCommits) return [];
   const arr = Array.isArray(recentCommits) ? recentCommits : [recentCommits];
   return arr.slice(0, LIMITS.commits).map((c) => {
-    if (typeof c === "string") return c;
-    const msg = c?.message ?? c?.subject ?? c?.title ?? asString(c);
+    if (typeof c === "string") return { line: c, message: c };
+    const msg = String(c?.message ?? c?.subject ?? c?.title ?? asString(c)).split("\n")[0];
     const author = c?.author?.name ?? c?.author ?? c?.author_name;
     const sha = c?.sha ?? c?.hash ?? c?.id;
     const short = typeof sha === "string" ? sha.slice(0, 7) : "";
-    return [short, author, String(msg).split("\n")[0]]
-      .filter(Boolean)
-      .join(" — ");
+    const line = [short, author, msg].filter(Boolean).join(" — ");
+    return { line, message: msg };
   });
+}
+
+function normalizePullRequests(recentPrs) {
+  if (!recentPrs) return [];
+  const arr = Array.isArray(recentPrs) ? recentPrs : [recentPrs];
+  return arr.slice(0, LIMITS.pullRequests).map((pr) => {
+    if (typeof pr === "string") return { line: pr, title: pr, body: "" };
+    const title = String(pr?.title ?? pr?.name ?? "(untitled PR)");
+    const number = pr?.number ?? pr?.id;
+    const author = pr?.author?.login ?? pr?.author ?? pr?.user;
+    const body = truncate(
+      asString(pr?.body ?? pr?.description ?? pr?.summary ?? ""),
+      LIMITS.prBodyChars,
+      "PR body truncated"
+    );
+    const prefix = number != null ? `#${number}` : "PR";
+    const line = [prefix, author, title].filter(Boolean).join(" — ");
+    return { line, title, body };
+  });
+}
+
+// Enough commit/PR signal to ask the model for "why" context without inventing it.
+export const MIN_COMMITS_FOR_RICH_HISTORY = 3;
+
+/**
+ * True when ingestion has enough real commit or PR history to ground "why" explanations.
+ * Sparse/empty history → describe structure only; don't ask for refactor backstory.
+ */
+export function hasRichCommitHistory(norm) {
+  if (norm.pullRequests?.length > 0) return true;
+  if (!norm.commits?.length) return false;
+  if (norm.commits.length >= MIN_COMMITS_FOR_RICH_HISTORY) return true;
+  return false;
 }
 
 /**
@@ -106,17 +140,26 @@ export function normalizeIngestion(payload = {}) {
   const commits = normalizeCommits(
     payload.recent_commits ?? payload.recentCommits ?? payload.commits
   );
+  const pullRequests = normalizePullRequests(
+    payload.recent_pull_requests ??
+      payload.recentPullRequests ??
+      payload.pull_requests ??
+      payload.pullRequests ??
+      payload.recent_prs ??
+      payload.recentPRs
+  );
   const manifest = truncate(
     asString(payload.package_manifest ?? payload.packageManifest ?? payload.manifest),
     LIMITS.manifestChars,
     "manifest truncated"
   );
 
-  return { fileTree, readme, keyFiles, commits, manifest };
+  return { fileTree, readme, keyFiles, commits, pullRequests, manifest };
 }
 
 /**
  * Renders the normalized ingestion into a single context string for prompts.
+ * Commit and PR history sit near the top so the model grounds "why" in real changes.
  */
 export function renderContext(norm) {
   const parts = [];
@@ -126,6 +169,23 @@ export function renderContext(norm) {
 
   parts.push("\n## README");
   parts.push(norm.readme || "(no README provided)");
+
+  parts.push("\n## RECENT COMMITS");
+  parts.push(
+    norm.commits.length
+      ? norm.commits.map((c) => `- ${c.line}`).join("\n")
+      : "(no recent commits provided)"
+  );
+
+  parts.push("\n## RECENT PULL REQUESTS");
+  if (!norm.pullRequests.length) {
+    parts.push("(no recent pull requests provided)");
+  } else {
+    for (const pr of norm.pullRequests) {
+      parts.push(`\n### ${pr.line}`);
+      if (pr.body) parts.push(pr.body);
+    }
+  }
 
   parts.push("\n## PACKAGE / DEPENDENCY MANIFEST");
   parts.push(norm.manifest || "(no manifest provided)");
@@ -142,9 +202,6 @@ export function renderContext(norm) {
     }
   }
 
-  parts.push("\n## RECENT COMMITS");
-  parts.push(norm.commits.length ? norm.commits.map((c) => `- ${c}`).join("\n") : "(no recent commits provided)");
-
   return parts.join("\n");
 }
 
@@ -157,6 +214,7 @@ export function hasUsableContent(norm) {
       norm.readme ||
       norm.keyFiles.length ||
       norm.commits.length ||
+      norm.pullRequests.length ||
       norm.manifest
   );
 }

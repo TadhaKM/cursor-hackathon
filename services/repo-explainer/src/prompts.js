@@ -41,10 +41,27 @@ function personaGuidance(persona) {
   return "AUDIENCE: a new team member with general software experience. Balance what the code does with why it's structured that way.";
 }
 
-export function buildArchitectureMessages(context, persona) {
+function commitHistoryGuidance(richHistory) {
+  if (richHistory) {
+    return [
+      "COMMIT & PR HISTORY (use this):",
+      "The ingested context includes RECENT COMMITS and RECENT PULL REQUESTS alongside the file tree and README.",
+      "Where the commit or PR history reveals WHY a module is structured a certain way — a refactor, a bug fix, a new feature addition — mention that context briefly.",
+      "Prefer explaining decisions over just describing structure. Quote or paraphrase real commit messages and PR titles/descriptions; tie them to specific files or folders.",
+      "Do not invent history that isn't in the provided commits or PRs.",
+    ].join(" ");
+  }
+  return [
+    "COMMIT & PR HISTORY (sparse or missing):",
+    "The repository has little or no commit/PR history in the ingestion payload.",
+    "Describe the current structure only. Do NOT invent refactors, bug fixes, or feature backstory that isn't supported by the data.",
+  ].join(" ");
+}
+
+export function buildArchitectureMessages(context, persona, { richHistory = false } = {}) {
   const system = [
     "You are a senior engineer explaining a codebase to a new team member.",
-    "Given the file tree, README, and key files below, identify:",
+    "Given the file tree, README, recent commits, recent pull requests, and key files below, identify:",
     "(1) the overall purpose of the project,",
     "(2) the main architectural layers/modules and what each does,",
     "(3) how data/requests flow through the system,",
@@ -52,6 +69,8 @@ export function buildArchitectureMessages(context, persona) {
     "Be concrete and reference actual file/folder names.",
     "Output in markdown with clear headers.",
     "Always write the architecture summary in English, regardless of any other language settings.",
+    "",
+    commitHistoryGuidance(richHistory),
     "",
     personaGuidance(persona),
   ].join("\n");
@@ -65,8 +84,11 @@ export function buildArchitectureMessages(context, persona) {
   return { system, user };
 }
 
-export function buildNarrationMessages(architectureSummary, persona, language) {
+export function buildNarrationMessages(architectureSummary, persona, language, { richHistory = false } = {}) {
   const langBlock = languageGuidance(language);
+  const historyNote = richHistory
+    ? "- When the architecture summary mentions a real commit, PR, or recent change, weave that into the spoken story naturally — e.g. \"we added JWT auth in a recent PR because...\" — so it sounds like institutional knowledge, not a changelog read aloud."
+    : "- Do not invent commit history or pretend you know why past changes were made unless the summary explicitly states it.";
   const system = [
     "You are writing what a friendly senior engineer would SAY out loud while walking a new hire through a codebase on their first day. This is a spoken video script, not documentation.",
     "",
@@ -81,7 +103,8 @@ export function buildNarrationMessages(architectureSummary, persona, language) {
     "CONTENT:",
     "- Be specific to THIS repo. Name real files and folders from the summary (like server.js, the routes folder, auth.js) and say what each actually does. Generic narration that could describe any project is a failure.",
     "- For each section explain WHAT the code does AND WHY it's built that way.",
-    "- Do not invent files, behavior, or tech that isn't in the summary.",
+    historyNote,
+    "- Do not invent files, behavior, tech, or commit history that isn't in the summary.",
     "",
     "STRUCTURE:",
     "- ALWAYS start with an \"Overview\" section, then one section per major module/folder.",

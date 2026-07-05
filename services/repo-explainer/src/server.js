@@ -72,6 +72,7 @@ app.post("/explain", async (req, res) => {
         persona: result.persona,
         language: result.language.code,
         language_name: result.language.name,
+        rich_history: result.rich_history,
         model: config.model,
         elapsed_ms: Date.now() - started,
         section_count: result.narration_script.sections.length,

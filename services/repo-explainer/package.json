@@ -10,6 +10,7 @@
     "smoke": "node scripts/smoke.js",
     "quality": "node scripts/quality-pass.js",
     "language-test": "node scripts/language-test.js",
+    "history-test": "node scripts/history-test.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {

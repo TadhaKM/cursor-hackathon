@@ -1,0 +1,65 @@
+{
+  "persona": "new_grad",
+  "file_tree": [
+    "src/server.js",
+    "src/config.js",
+    "src/routes/auth.js",
+    "src/routes/todos.js",
+    "src/db/index.js",
+    "src/db/migrations/001_init.sql",
+    "src/db/migrations/002_add_user_id.sql",
+    "src/middleware/auth.js",
+    "src/middleware/rateLimit.js",
+    "test/todos.test.js",
+    "test/auth.test.js",
+    "package.json",
+    "README.md"
+  ],
+  "readme": "# TodoAPI\n\nA small REST API for managing todos with JWT auth. Built with Express and SQLite.",
+  "package_manifest": {
+    "name": "todo-api",
+    "dependencies": {
+      "express": "^4.18.0",
+      "jsonwebtoken": "^9.0.0",
+      "better-sqlite3": "^9.0.0",
+      "express-rate-limit": "^7.0.0"
+    }
+  },
+  "key_files": [
+    {
+      "path": "src/server.js",
+      "content": "import express from 'express';\nimport authRoutes from './routes/auth.js';\nimport todoRoutes from './routes/todos.js';\nimport { requireAuth } from './middleware/auth.js';\nimport { apiLimiter } from './middleware/rateLimit.js';\n\nconst app = express();\napp.use(express.json());\napp.use(apiLimiter);\napp.use('/auth', authRoutes);\napp.use('/todos', requireAuth, todoRoutes);\napp.listen(3000);"
+    },
+    {
+      "path": "src/middleware/auth.js",
+      "content": "import jwt from 'jsonwebtoken';\nexport function requireAuth(req, res, next) {\n  const token = req.headers.authorization?.split(' ')[1];\n  if (!token) return res.status(401).json({ error: 'missing token' });\n  try { req.user = jwt.verify(token, process.env.JWT_SECRET); next(); }\n  catch { res.status(401).json({ error: 'bad token' }); }\n}"
+    },
+    {
+      "path": "src/middleware/rateLimit.js",
+      "content": "import rateLimit from 'express-rate-limit';\nexport const apiLimiter = rateLimit({ windowMs: 60_000, max: 100 });"
+    }
+  ],
+  "recent_commits": [
+    { "sha": "f4e8a21", "author": "Dana", "message": "Add express-rate-limit middleware after auth abuse in staging" },
+    { "sha": "b3c7d90", "author": "Sam", "message": "Refactor auth into src/middleware/auth.js (was inline in server.js)" },
+    { "sha": "a1b2c3d", "author": "Dana", "message": "Add JWT auth middleware and /auth login route" },
+    { "sha": "e5f6a7b8", "author": "Sam", "message": "Switch DB layer to better-sqlite3 after node-sqlite3 build failures on CI" },
+    { "sha": "c9d0e1f2", "author": "Dana", "message": "Add /todos CRUD routes and integration tests" },
+    { "sha": "1122334", "author": "Leo", "message": "Migration 002: add user_id column to todos for per-user scoping" },
+    { "sha": "5566778", "author": "Sam", "message": "Initial Express scaffold with SQLite" }
+  ],
+  "recent_pull_requests": [
+    {
+      "number": 18,
+      "title": "Extract JWT auth into middleware",
+      "author": "dana",
+      "body": "Auth logic was duplicated across routes. This PR moves verification into src/middleware/auth.js and wraps /todos so every todo endpoint requires a valid Bearer token. Follow-up to incident where unauthenticated clients could list todos."
+    },
+    {
+      "number": 12,
+      "title": "Replace node-sqlite3 with better-sqlite3",
+      "author": "sam",
+      "body": "CI kept failing native compiles on Apple Silicon runners. better-sqlite3 ships prebuilds; src/db/index.js now opens a single shared connection used by all routes."
+    }
+  ]
+}

@@ -7,8 +7,9 @@ import {
   normalizeIngestion,
   renderContext,
   hasUsableContent,
+  hasRichCommitHistory,
 } from "../src/ingestion.js";
-import { normalizePersona, SECTION_CHAR_HARDCAP, buildNarrationMessages } from "../src/prompts.js";
+import { normalizePersona, SECTION_CHAR_HARDCAP, buildNarrationMessages, buildArchitectureMessages } from "../src/prompts.js";
 import { parseNarration, capScript, countWords } from "../src/narration.js";
 import { buildChunks, retrieve } from "../src/rag.js";
 import { classifySectionLength, withCounts } from "../src/narration.js";
@@ -54,16 +55,53 @@ test("normalizeIngestion handles array file tree and object key_files map", () =
   assert.equal(norm.keyFiles.length, 1);
   assert.equal(norm.keyFiles[0].path, "src/a.js");
   assert.equal(norm.commits.length, 1);
-  assert.match(norm.commits[0], /init/);
+  assert.match(norm.commits[0].line, /init/);
+  assert.match(norm.commits[0].message, /init/);
   assert.equal(hasUsableContent(norm), true);
 });
 
-test("renderContext includes all sections", () => {
+test("renderContext includes all sections with history near the top", () => {
   const ctx = renderContext(normalizeIngestion({ readme: "hi" }));
   assert.match(ctx, /## FILE TREE/);
   assert.match(ctx, /## README/);
-  assert.match(ctx, /## KEY FILES/);
   assert.match(ctx, /## RECENT COMMITS/);
+  assert.match(ctx, /## RECENT PULL REQUESTS/);
+  assert.match(ctx, /## KEY FILES/);
+  const commitIdx = ctx.indexOf("## RECENT COMMITS");
+  const keyFilesIdx = ctx.indexOf("## KEY FILES");
+  assert.ok(commitIdx < keyFilesIdx, "commits should appear before key files");
+});
+
+test("hasRichCommitHistory is true for 3+ commits or any PR", () => {
+  const richCommits = normalizeIngestion({
+    recent_commits: [
+      { message: "a" },
+      { message: "b" },
+      { message: "c" },
+    ],
+  });
+  assert.equal(hasRichCommitHistory(richCommits), true);
+
+  const withPr = normalizeIngestion({
+    recent_commits: [{ message: "init" }],
+    recent_pull_requests: [{ number: 1, title: "Add auth", body: "Needed for security" }],
+  });
+  assert.equal(hasRichCommitHistory(withPr), true);
+
+  const sparse = normalizeIngestion({
+    recent_commits: [{ message: "init" }],
+  });
+  assert.equal(hasRichCommitHistory(sparse), false);
+});
+
+test("buildArchitectureMessages includes history guidance when rich", () => {
+  const { system: rich } = buildArchitectureMessages("ctx", null, { richHistory: true });
+  assert.match(rich, /WHY a module is structured/i);
+  assert.match(rich, /RECENT COMMITS/i);
+
+  const { system: sparse } = buildArchitectureMessages("ctx", null, { richHistory: false });
+  assert.match(sparse, /Do NOT invent refactors/i);
+  assert.doesNotMatch(sparse, /WHY a module is structured/i);
 });
 
 test("hasUsableContent is false for empty payload", () => {
