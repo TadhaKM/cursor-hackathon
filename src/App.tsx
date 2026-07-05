@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, useCallback, type ReactNode } from "react"
 import { marked } from "marked";
 import {
   runPipeline,
+  runDiffPipeline,
   backendMode,
   TOOL_DOCS,
   type StageId,
   type PipelineResult,
+  type DiffPipelineResult,
   type Persona,
   type IngestResult,
 } from "./api";
@@ -22,7 +24,7 @@ import {
 } from "./history";
 import "./App.css";
 
-type ViewState = "input" | "progress" | "result" | "error";
+type ViewState = "input" | "progress" | "result" | "diff-result" | "error";
 type Page = "app" | "about" | "faq" | "changelog";
 
 const PIPELINE_STEPS = ["Ingest repo", "Explain architecture", "Render videos"];
@@ -139,6 +141,7 @@ const STEP_LABELS: Record<ViewState, string> = {
   input: "Step 1 · Paste a repo",
   progress: "Step 2 · Building",
   result: "Step 3 · Walkthrough ready",
+  "diff-result": "Step 3 · Diff explained",
   error: "Something went wrong",
 };
 
@@ -866,6 +869,15 @@ function App() {
   const [failedStage, setFailedStage] = useState<StageId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [result, setResult] = useState<PipelineResult | null>(null);
+  // Diff mode — explain what changed between two refs instead of a full
+  // repo walkthrough. Deliberately kept separate from the main result/
+  // history machinery above: diff results are always exactly one section,
+  // so they don't need the section sidebar, keyboard shortcuts, or
+  // walkthrough-history persistence the main pipeline has.
+  const [diffMode, setDiffMode] = useState(false);
+  const [baseRef, setBaseRef] = useState("");
+  const [headRef, setHeadRef] = useState("");
+  const [diffResult, setDiffResult] = useState<DiffPipelineResult | null>(null);
   const [activeSection, setActiveSection] = useState(0);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [recents, setRecents] = useState<string[]>([]);
@@ -982,8 +994,55 @@ function App() {
     }
   }
 
+  async function startDiff() {
+    const trimmedRepo = repoUrl.trim();
+    const trimmedBase = baseRef.trim();
+    const trimmedHead = headRef.trim();
+    if (!trimmedRepo || !trimmedBase || !trimmedHead) {
+      setInputError("Diff mode needs a repo URL and both refs (e.g. a tag, branch, or commit SHA).");
+      return;
+    }
+    setInputError("");
+    setPage("app");
+    setView("progress");
+    setCompleted(new Set());
+    setFailedStage(null);
+    setActiveStage(STAGES[0].id);
+    setErrorMessage("");
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const res = await runDiffPipeline(
+        trimmedRepo,
+        trimmedBase,
+        trimmedHead,
+        ({ stage, ok }) => {
+          if (ok) {
+            setCompleted((prev) => new Set(prev).add(stage));
+            const idx = STAGES.findIndex((s) => s.id === stage);
+            setActiveStage(STAGES[idx + 1]?.id ?? null);
+          } else {
+            setFailedStage(stage);
+          }
+        },
+        controller.signal
+      );
+      setDiffResult(res);
+      setView("diff-result");
+      toast("Diff explained", "success");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
+      setView("error");
+    }
+  }
+
   function retry() {
-    start();
+    if (diffMode) {
+      startDiff();
+    } else {
+      start();
+    }
   }
 
   return (
@@ -1052,6 +1111,19 @@ function App() {
                 recents={recents}
                 history={history}
                 onOpenHistory={openWalkthrough}
+                diffMode={diffMode}
+                onDiffModeChange={setDiffMode}
+                baseRef={baseRef}
+                onBaseRefChange={(v) => {
+                  setBaseRef(v);
+                  if (inputError) setInputError("");
+                }}
+                headRef={headRef}
+                onHeadRefChange={(v) => {
+                  setHeadRef(v);
+                  if (inputError) setInputError("");
+                }}
+                onSubmitDiff={() => startDiff()}
               />
               <FeatureShowcase />
             </>
@@ -1059,6 +1131,16 @@ function App() {
 
           {page === "app" && view === "progress" && (
             <ProgressView completed={completed} activeStage={activeStage} failedStage={failedStage} />
+          )}
+
+          {page === "app" && view === "diff-result" && diffResult && (
+            <DiffResultView
+              result={diffResult}
+              onReset={() => {
+                setView("input");
+                window.history.replaceState(null, "", window.location.pathname);
+              }}
+            />
           )}
 
           {page === "app" && view === "result" && result && (
@@ -1144,6 +1226,13 @@ function InputView({
   recents,
   history,
   onOpenHistory,
+  diffMode,
+  onDiffModeChange,
+  baseRef,
+  onBaseRefChange,
+  headRef,
+  onHeadRefChange,
+  onSubmitDiff,
 }: {
   repoUrl: string;
   onChange: (v: string) => void;
@@ -1154,6 +1243,13 @@ function InputView({
   recents: string[];
   history: WalkthroughEntry[];
   onOpenHistory: (entry: WalkthroughEntry) => void;
+  diffMode: boolean;
+  onDiffModeChange: (v: boolean) => void;
+  baseRef: string;
+  onBaseRefChange: (v: string) => void;
+  headRef: string;
+  onHeadRefChange: (v: string) => void;
+  onSubmitDiff: () => void;
 }) {
   const examples = [
     "github.com/expressjs/express",
@@ -1174,6 +1270,24 @@ function InputView({
 
         <PipelineStrip />
 
+        <div className="persona-row">
+          <span className="persona-label">Mode</span>
+          <div className="persona-toggle">
+            <button
+              className={`persona-btn ${!diffMode ? "persona-btn-active" : ""}`}
+              onClick={() => onDiffModeChange(false)}
+            >
+              Full walkthrough
+            </button>
+            <button
+              className={`persona-btn ${diffMode ? "persona-btn-active" : ""}`}
+              onClick={() => onDiffModeChange(true)}
+            >
+              Explain a diff
+            </button>
+          </div>
+        </div>
+
         <div className={`input-row ${error ? "input-row-error" : ""}`}>
           <span className="input-prefix">url&nbsp;&gt;</span>
           <input
@@ -1184,10 +1298,41 @@ function InputView({
             aria-label="GitHub repository URL"
             aria-invalid={!!error}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onSubmit();
+              if (e.key === "Enter" && !diffMode) onSubmit();
             }}
           />
         </div>
+
+        {diffMode && (
+          <div className="diff-refs-row">
+            <div className={`input-row ${error ? "input-row-error" : ""}`}>
+              <span className="input-prefix">base&nbsp;&gt;</span>
+              <input
+                type="text"
+                value={baseRef}
+                onChange={(e) => onBaseRefChange(e.target.value)}
+                placeholder="e.g. v1.0.0 or main"
+                aria-label="Base ref (tag, branch, or commit SHA)"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onSubmitDiff();
+                }}
+              />
+            </div>
+            <div className={`input-row ${error ? "input-row-error" : ""}`}>
+              <span className="input-prefix">head&nbsp;&gt;</span>
+              <input
+                type="text"
+                value={headRef}
+                onChange={(e) => onHeadRefChange(e.target.value)}
+                placeholder="e.g. v1.1.0 or a commit SHA"
+                aria-label="Head ref (tag, branch, or commit SHA)"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onSubmitDiff();
+                }}
+              />
+            </div>
+          </div>
+        )}
         {error && <p className="input-error">{error}</p>}
 
         <div className="chip-row">
@@ -1229,16 +1374,74 @@ function InputView({
         </div>
 
         <div className="actions">
-          <button className="btn btn-primary" onClick={onSubmit}>
-            Generate walkthrough
+          <button className="btn btn-primary" onClick={diffMode ? onSubmitDiff : onSubmit}>
+            {diffMode ? "Explain the diff" : "Generate walkthrough"}
           </button>
         </div>
 
-        <WalkthroughHistory entries={history} onOpen={onOpenHistory} />
+        {!diffMode && <WalkthroughHistory entries={history} onOpen={onOpenHistory} />}
       </div>
 
       <div className="input-visual">
         <TerminalPreview />
+      </div>
+    </div>
+  );
+}
+
+// Diff mode's result screen — deliberately simpler than ResultView: a diff
+// explanation is always exactly one section, so there's no section sidebar,
+// no diagram, no walkthrough-history persistence to wire up.
+function DiffResultView({
+  result,
+  onReset,
+}: {
+  result: DiffPipelineResult;
+  onReset: () => void;
+}) {
+  return (
+    <div className="panel">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">// {result.repo}</p>
+          <h2>
+            {result.baseRef} → {result.headRef}
+          </h2>
+          <p className="lede">
+            {result.filesChanged} of {result.totalFilesChanged} changed files narrated
+            {result.totalFilesChanged > result.filesChanged ? " (largest changes prioritized)" : ""}.
+          </p>
+        </div>
+        <div className="result-actions">
+          <button className="btn" onClick={onReset} type="button">
+            ← Explain another
+          </button>
+        </div>
+      </div>
+
+      <div className="result-grid">
+        <div className="video-col">
+          <div className="video-wrap">
+            {result.video.video_url ? (
+              <video
+                className="video"
+                src={result.video.video_url}
+                controls
+                playsInline
+                aria-label={`Diff explanation: ${result.section.title}`}
+              />
+            ) : (
+              <div className="video video-placeholder" role="status">
+                Still rendering…
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="sections-col">
+          <h3>{result.section.title}</h3>
+          <p>{result.section.script}</p>
+        </div>
       </div>
     </div>
   );

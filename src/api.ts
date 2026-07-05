@@ -64,6 +64,52 @@ export interface PipelineResult {
   ingestion: IngestResult;
 }
 
+// ---------------------------------------------------------------------
+// Diff mode — narrate what changed between two refs instead of a full repo
+// walkthrough:
+//   POST {INGEST}/diff          -> DiffResult
+//   POST {EXPLAIN}/explain-diff -> ExplainDiffResult (always exactly 1 section)
+//   POST {RENDER}/render        -> same render/poll path as the main pipeline
+// ---------------------------------------------------------------------
+
+export interface DiffFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string;
+}
+
+export interface DiffResult {
+  repo_url: string;
+  base_ref: string;
+  head_ref: string;
+  total_commits: number;
+  commits: { message: string; date: string }[];
+  files: DiffFile[];
+  meta: {
+    owner: string;
+    repo: string;
+    total_files_changed: number;
+    files_included: number;
+    truncated: boolean;
+  };
+}
+
+export interface ExplainDiffResult {
+  narration_script: { sections: ExplainSection[] };
+}
+
+export interface DiffPipelineResult {
+  repo: string;
+  baseRef: string;
+  headRef: string;
+  section: ExplainSection;
+  video: VideoSection;
+  filesChanged: number;
+  totalFilesChanged: number;
+}
+
 const INGEST_URL = import.meta.env.VITE_INGEST_URL as string | undefined;
 const EXPLAIN_URL = import.meta.env.VITE_EXPLAIN_URL as string | undefined;
 const RENDER_URL = import.meta.env.VITE_RENDER_URL as string | undefined;
@@ -227,6 +273,66 @@ export async function runPipeline(
   };
 }
 
+export async function runDiffPipeline(
+  repoUrl: string,
+  baseRef: string,
+  headRef: string,
+  onStage: (e: StageEvent) => void,
+  signal?: AbortSignal
+): Promise<DiffPipelineResult> {
+  if (!USING_REAL_BACKEND) {
+    return runMockDiffPipeline(repoUrl, baseRef, headRef, onStage, signal);
+  }
+
+  // 1. Diff — reuses the "ingest" stage slot, same UI progress step.
+  const diffRes = await postJSON<DiffResult>(
+    `${INGEST_URL}/diff`,
+    { repo_url: repoUrl, base_ref: baseRef, head_ref: headRef },
+    signal
+  );
+  onStage({ stage: "ingest", ok: true });
+
+  // 2. Explain the diff — always exactly one section (see diffExplain.js).
+  const explainRes = await postJSON<ExplainDiffResult>(
+    `${EXPLAIN_URL}/explain-diff`,
+    diffRes,
+    signal
+  );
+  onStage({ stage: "explain", ok: true });
+
+  const section = explainRes.narration_script.sections[0];
+  if (!section) {
+    onStage({ stage: "explain", ok: false });
+    throw new Error("Diff narration returned no section");
+  }
+
+  // 3. Render — same single render/poll path as the main pipeline, just one
+  // section and no diagram.
+  const kickoff = await postJSON<RenderResult>(
+    `${RENDER_URL}/render`,
+    { sections: [section] },
+    signal
+  );
+
+  const final = await pollRender(kickoff, signal);
+
+  if (final.status === "failed" || !final.videos[0]) {
+    onStage({ stage: "render", ok: false });
+    throw new Error("Video rendering failed");
+  }
+  onStage({ stage: "render", ok: true });
+
+  return {
+    repo: repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || repoUrl,
+    baseRef,
+    headRef,
+    section,
+    video: final.videos[0],
+    filesChanged: diffRes.meta.files_included,
+    totalFilesChanged: diffRes.meta.total_files_changed,
+  };
+}
+
 async function pollRender(
   initial: RenderResult,
   signal?: AbortSignal
@@ -347,5 +453,44 @@ async function runMockPipeline(
       recent_commits: [],
       package_manifest: "",
     },
+  };
+}
+
+async function runMockDiffPipeline(
+  repoUrl: string,
+  baseRef: string,
+  headRef: string,
+  onStage: (e: StageEvent) => void,
+  signal?: AbortSignal
+): Promise<DiffPipelineResult> {
+  await wait(1000, signal);
+  onStage({ stage: "ingest", ok: true });
+
+  await wait(1500, signal);
+  onStage({ stage: "explain", ok: true });
+
+  await wait(2000, signal);
+  onStage({ stage: "render", ok: true });
+
+  const name = repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || "example/demo-repo";
+  const section: ExplainSection = {
+    title: "What Changed",
+    script:
+      `This is a mock diff narration, shown because no backend URLs are configured yet. Between ${baseRef} and ${headRef}, ` +
+      `a handful of files changed. In a real run, this would call out actual behavior changes and why they likely matter to someone coming back to this code after time away — not just a list of files.`,
+  };
+
+  return {
+    repo: name,
+    baseRef,
+    headRef,
+    section,
+    video: {
+      title: section.title,
+      video_url: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+      status: "completed",
+    },
+    filesChanged: 3,
+    totalFilesChanged: 3,
   };
 }

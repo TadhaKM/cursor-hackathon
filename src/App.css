@@ -270,6 +270,17 @@ h3 {
   align-items: center;
 }
 
+.diff-refs-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.diff-refs-row .input-row {
+  flex: 1;
+  min-width: 0;
+}
+
 .input-copy {
   display: flex;
   flex-direction: column;
