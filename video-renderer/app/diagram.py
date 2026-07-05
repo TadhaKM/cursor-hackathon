@@ -10,20 +10,27 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 # Rectangle node labels: [ ... ] with no nested brackets. This is the shape
 # Gemini overwhelmingly emits, and the one that breaks when the label text
-# contains parentheses (e.g. "Server (src/server.js)").
+# contains special characters (parentheses, "@", "/", ":", etc. — e.g.
+# "Server (src/server.js)" or "@scope/pkg").
 _RECT_LABEL_RE = re.compile(r"\[([^\[\]]+)\]")
+
+# Characters mermaid tolerates in an *unquoted* rectangle label. Anything else
+# (parentheses, @, /, :, &, etc.) must be wrapped in quotes or the Kroki parse
+# fails. Space, period, comma and hyphen are common and safe, so labels made of
+# only these are left alone (this also avoids quoting subgraph titles).
+_SAFE_LABEL_RE = re.compile(r"^[\w .,\-]+$")
 
 
 def _sanitize_mermaid(src: str) -> str:
-    """Quote rectangle node-label text that contains parentheses so mermaid's
-    parser on Kroki doesn't choke (e.g. Gemini's "Server (src/server.js)").
-    Labels without parens, and already-quoted labels, are left untouched."""
+    """Quote rectangle node-label text containing characters mermaid can't
+    parse unquoted (parentheses, "@", "/", ":", etc.) so the Kroki render
+    doesn't silently fail. Safe labels and already-quoted labels are untouched."""
 
     def quote(m: re.Match) -> str:
         text = m.group(1)
-        if "(" not in text and ")" not in text:
-            return m.group(0)
         if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+            return m.group(0)
+        if _SAFE_LABEL_RE.match(text):
             return m.group(0)
         return '["' + text.replace('"', "#quot;") + '"]'
 
