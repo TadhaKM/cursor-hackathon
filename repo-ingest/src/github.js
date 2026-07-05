@@ -265,6 +265,46 @@ export async function getRecentCommits(octokit, { owner, repo, count = 10 }) {
   }
 }
 
+/**
+ * Fetch the diff between two refs (branches, tags, or commit SHAs) via
+ * GitHub's compare API. Returns the raw comparison — file-level trimming
+ * happens in diff.js, matching how ingest.js trims getTree()'s raw output.
+ */
+export async function getCompare(octokit, { owner, repo, base, head }) {
+  try {
+    const { data } = await octokit.repos.compareCommitsWithBasehead({
+      owner,
+      repo,
+      basehead: `${base}...${head}`,
+    });
+    return {
+      ahead_by: data.ahead_by,
+      behind_by: data.behind_by,
+      total_commits: data.total_commits,
+      commits: (data.commits || []).map((c) => ({
+        message: c.commit?.message || "",
+        date: c.commit?.author?.date || c.commit?.committer?.date || "",
+      })),
+      files: (data.files || []).map((f) => ({
+        path: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch || null, // null for binary/too-large files
+      })),
+    };
+  } catch (err) {
+    if (err?.status === 404) {
+      throw new GitHubError(
+        `Could not compare '${base}...${head}' on '${owner}/${repo}' — check that both refs exist.`,
+        { status: 404, code: "NOT_FOUND" }
+      );
+    }
+    throw translateError(err, { owner, repo });
+  }
+}
+
 export async function getRecentMergedPRs(octokit, { owner, repo, count = 5 }) {
   try {
     const { data } = await octokit.pulls.list({
