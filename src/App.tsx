@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { marked } from "marked";
 import {
   runPipeline,
@@ -284,16 +284,6 @@ const STATS = [
   { target: 312, suffix: "", label: "senior engineers who didn't repeat themselves" },
 ];
 
-function StatsStrip() {
-  return (
-    <div className="stats-strip">
-      {STATS.map((s) => (
-        <StatCounter key={s.label} {...s} />
-      ))}
-    </div>
-  );
-}
-
 function StatCounter({ target, suffix, label }: { target: number; suffix: string; label: string }) {
   const value = useCountUp(target);
   return (
@@ -316,33 +306,169 @@ const DIAGRAM_NODES = [
     id: "github",
     label: "GitHub",
     hash: "src",
+    icon: "⌘",
     detail: "We pull the file tree, README, package manifest, and recent commit history straight from the repo you paste in.",
   },
   {
     id: "ingest",
     label: "Ingest",
     hash: "a3f1c9",
+    icon: "📥",
     detail: "Person 1's service normalizes all of that into a single structured payload the explainer can reason about.",
   },
   {
     id: "explain",
     label: "Explain",
     hash: "7e2b4d",
+    icon: "✍",
     detail: "An LLM turns the structure into a narration script — one section per module, written to be heard, not skimmed.",
   },
   {
     id: "render",
     label: "Render",
     hash: "c91d02",
+    icon: "▶",
     detail: "Each section becomes its own short video, so nobody sits through twelve minutes to find the auth explanation.",
   },
   {
     id: "video",
     label: "Video",
     hash: "out",
+    icon: "🎬",
     detail: "You get back a sidebar of short walkthroughs plus the architecture summary they were built from.",
   },
 ];
+
+const FEATURE_TILES = [
+  {
+    id: "read",
+    icon: "📂",
+    label: "Reads code",
+    detail: "File tree, README, manifests, and recent commits — the same things a senior engineer opens on day one.",
+  },
+  {
+    id: "write",
+    icon: "📝",
+    label: "Writes script",
+    detail: "Architecture docs rewritten as spoken narration — short sentences, real file names, no bullet points.",
+  },
+  {
+    id: "render",
+    icon: "🎥",
+    label: "Renders video",
+    detail: "One section, one short clip. Overview first, then deep-dives per module.",
+  },
+  {
+    id: "ask",
+    icon: "💬",
+    label: "Answers questions",
+    detail: "Chat wired to the same repo context the video was built from — for what the walkthrough didn't cover.",
+  },
+  {
+    id: "personas",
+    icon: "👥",
+    label: "Personas",
+    detail: "New grad or senior engineer tone — same repo, different depth of explanation.",
+  },
+  {
+    id: "mock",
+    icon: "⚡",
+    label: "Mock mode",
+    detail: "Full UI flow in ~5 seconds when no backend is running. Flip to live when services are up.",
+  },
+  {
+    id: "history",
+    icon: "🕐",
+    label: "Walkthrough history",
+    detail: "Past results saved to localStorage — reopen instantly or share a link.",
+  },
+  {
+    id: "export",
+    icon: "⬇",
+    label: "Export & share",
+    detail: "Download architecture.md, copy the summary, or grab a shareable walkthrough URL.",
+  },
+];
+
+function WindowChrome({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="window-chrome">
+      <div className="window-titlebar">
+        <span className="window-dot window-dot-del" />
+        <span className="window-dot window-dot-add" />
+        <span className="window-dot window-dot-pop" />
+        <span className="window-title">{title}</span>
+      </div>
+      <div className="window-body">{children}</div>
+    </div>
+  );
+}
+
+function PipelineCards() {
+  const [active, setActive] = useState(DIAGRAM_NODES[0].id);
+  const node = DIAGRAM_NODES.find((n) => n.id === active) ?? DIAGRAM_NODES[0];
+
+  return (
+    <WindowChrome title="pipeline.exe — click a stage">
+      <div className="pipeline-cards">
+        {DIAGRAM_NODES.map((n) => (
+          <button
+            key={n.id}
+            type="button"
+            className={`pipeline-card ${active === n.id ? "pipeline-card-active" : ""}`}
+            onClick={() => setActive(n.id)}
+            onMouseEnter={() => setActive(n.id)}
+            onFocus={() => setActive(n.id)}
+          >
+            <span className="pipeline-card-icon">{n.icon}</span>
+            <span className="pipeline-card-label">{n.label}</span>
+            <span className="pipeline-card-hash">{n.hash}</span>
+          </button>
+        ))}
+      </div>
+      <p className="pipeline-detail">{node.detail}</p>
+    </WindowChrome>
+  );
+}
+
+function FeatureGrid() {
+  const [active, setActive] = useState<string | null>(null);
+
+  return (
+    <WindowChrome title="features.grid — hover or click">
+      <div className="feature-grid">
+        {FEATURE_TILES.map((tile) => (
+          <button
+            key={tile.id}
+            type="button"
+            className={`feature-tile ${active === tile.id ? "feature-tile-active" : ""}`}
+            onClick={() => setActive(active === tile.id ? null : tile.id)}
+            onMouseEnter={() => setActive(tile.id)}
+            onMouseLeave={() => setActive(null)}
+            onFocus={() => setActive(tile.id)}
+            onBlur={() => setActive(null)}
+          >
+            <span className="feature-tile-icon">{tile.icon}</span>
+            <span className="feature-tile-label">{tile.label}</span>
+            {active === tile.id && <p className="feature-tile-detail">{tile.detail}</p>}
+          </button>
+        ))}
+      </div>
+    </WindowChrome>
+  );
+}
+
+function StatsTiles() {
+  return (
+    <div className="stats-tiles">
+      {STATS.map((s) => (
+        <div className="stat-tile" key={s.label}>
+          <StatCounter {...s} />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function ArchitectureDiagram() {
   const [hovered, setHovered] = useState<string>(DIAGRAM_NODES[0].id);
@@ -376,16 +502,29 @@ function ArchitectureDiagram() {
 
 function AboutPage() {
   return (
-    <div className="panel page-panel">
+    <div className="panel page-panel page-panel-dense page-enter">
       <p className="eyebrow">// how it works</p>
       <h1>Five hops from a repo URL to a video someone watches.</h1>
-      <p className="lede">
-        Hover or click a stage below to see what it actually does — this is
-        the real pipeline, not a marketing diagram.
+      <p className="lede page-lede-compact">
+        Click a pipeline stage or feature tile — this is the real flow, not a marketing diagram.
       </p>
-      <ArchitectureDiagram />
-      <h3>By the numbers</h3>
-      <StatsStrip />
+
+      <div className="about-grid">
+        <div className="about-col-full">
+          <PipelineCards />
+        </div>
+        <div>
+          <h3>By the numbers</h3>
+          <StatsTiles />
+        </div>
+        <div>
+          <h3>What you get</h3>
+          <ArchitectureDiagram />
+        </div>
+        <div className="about-col-full">
+          <FeatureGrid />
+        </div>
+      </div>
     </div>
   );
 }
@@ -394,43 +533,120 @@ function AboutPage() {
 // FAQ — accordion
 // ---------------------------------------------------------------------
 
-const FAQ_ITEMS = [
+type FaqCategory = "all" | "pipeline" | "chat" | "limits" | "demo";
+
+const FAQ_CATEGORIES: { id: FaqCategory; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "pipeline", label: "Pipeline" },
+  { id: "chat", label: "Chat" },
+  { id: "limits", label: "Limits" },
+  { id: "demo", label: "Demo" },
+];
+
+const FAQ_ITEMS: { cat: FaqCategory; q: string; a: string }[] = [
   {
+    cat: "limits",
     q: "Does it work on private repos?",
     a: "Not yet — the ingest step currently only reads public GitHub repos. Private repo support would need OAuth, which isn't wired up in this build.",
   },
   {
+    cat: "pipeline",
     q: "How long does a render take?",
     a: "In mock mode, the whole pipeline finishes in about 5 seconds so you can test the UI. Against a real backend, expect it to take as long as HeyGen needs to render each section's video — usually a minute or two per section.",
   },
   {
+    cat: "pipeline",
     q: "What happens if a stage fails?",
     a: "You land on the error screen showing exactly which stage failed. Retrying picks up from scratch, but nothing earlier in the pipeline needs to be re-explained to you — the error message tells you what broke.",
   },
   {
+    cat: "chat",
     q: "Can I ask questions about the codebase afterward?",
     a: "Yes — use the chat box under your walkthrough results, or the floating \"?\" button in the corner. Both call the same Qwen-powered RAG endpoint the explainer service exposes. On the results page they answer using the repo's actual files; elsewhere the \"?\" button answers general tool questions.",
   },
   {
+    cat: "pipeline",
     q: "Why only three pipeline stages?",
     a: "Ingest, explain, and render map directly onto the three teammates' services in this project. Keeping the frontend's mental model that simple made it easy to build against mocks before any backend existed.",
+  },
+  {
+    cat: "demo",
+    q: "What's the difference between mock and live mode?",
+    a: "Mock mode runs canned responses locally — great for demos and UI testing without any backend. Live mode hits the real /ingest, /explain, and /render services. The pill in the top bar shows which you're on.",
+  },
+  {
+    cat: "demo",
+    q: "What keyboard shortcuts are available?",
+    a: "On the results screen: ← → or [ ] to switch sections. On input: Enter to submit. In chat: Ctrl+Enter to send. Anywhere: ? opens the shortcuts modal, Esc closes it.",
+  },
+  {
+    cat: "pipeline",
+    q: "Can I reopen a past walkthrough?",
+    a: "Yes — every completed run is saved to walkthrough history in localStorage. Reopen from the input screen's history cards, or paste a #walk/… share link someone sent you.",
+  },
+  {
+    cat: "pipeline",
+    q: "Can I export or share the architecture summary?",
+    a: "On the results screen: download architecture.md, copy the summary to clipboard, or copy a shareable link. Toasts confirm each action.",
+  },
+  {
+    cat: "pipeline",
+    q: "Where is the narration script for each section?",
+    a: "Below the video on the results screen — the transcript panel shows the full narration script for whichever section you're watching. Use section shortcuts to flip between them.",
+  },
+  {
+    cat: "chat",
+    q: "Does the chat use the same context as the video?",
+    a: "On the results page, yes — chat is grounded in the same ingested repo files the explainer used. The floating \"?\" button on other pages answers general questions about how repo → video works.",
+  },
+  {
+    cat: "limits",
+    q: "Which repos work best?",
+    a: "Public GitHub repos with a README, clear entry points, and a few top-level modules. Monoliths and microservices both work — the explainer adapts section count to what it finds.",
   },
 ];
 
 function FaqPage() {
-  const [openIndex, setOpenIndex] = useState<number | null>(0);
+  const [category, setCategory] = useState<FaqCategory>("all");
+  const [openKey, setOpenKey] = useState<string | null>(FAQ_ITEMS[0].q);
+
+  const filtered =
+    category === "all" ? FAQ_ITEMS : FAQ_ITEMS.filter((item) => item.cat === category);
+
   return (
-    <div className="panel page-panel">
+    <div className="panel page-panel page-panel-dense page-enter">
       <p className="eyebrow">// frequently asked</p>
       <h1>Questions people actually ask.</h1>
+
+      <div className="faq-toolbar" role="tablist" aria-label="FAQ categories">
+        {FAQ_CATEGORIES.map((cat) => (
+          <button
+            key={cat.id}
+            type="button"
+            role="tab"
+            aria-selected={category === cat.id}
+            className={`faq-filter ${category === cat.id ? "faq-filter-active" : ""}`}
+            onClick={() => {
+              setCategory(cat.id);
+              setOpenKey(null);
+            }}
+          >
+            {cat.label}
+          </button>
+        ))}
+      </div>
+
       <div className="faq-list">
-        {FAQ_ITEMS.map((item, i) => {
-          const isOpen = openIndex === i;
+        {filtered.length === 0 && (
+          <p className="faq-empty">No questions in this category yet.</p>
+        )}
+        {filtered.map((item) => {
+          const isOpen = openKey === item.q;
           return (
             <div className={`faq-item ${isOpen ? "faq-item-open" : ""}`} key={item.q}>
               <button
                 className="faq-question"
-                onClick={() => setOpenIndex(isOpen ? null : i)}
+                onClick={() => setOpenKey(isOpen ? null : item.q)}
                 aria-expanded={isOpen}
               >
                 <span>{item.q}</span>
@@ -450,6 +666,17 @@ function FaqPage() {
 // ---------------------------------------------------------------------
 
 const CHANGELOG_ENTRIES = [
+  {
+    version: "v0.7.0",
+    date: "Jul 5, 2026",
+    hash: "d4b8a2",
+    changes: [
+      "Secondary pages redesign: interactive pipeline cards, feature grid, window chrome",
+      "FAQ category filters, 12 questions, two-column dense layout on desktop",
+      "Changelog as git-log terminal with version filters and click-to-copy hashes",
+      "Typography bump to 18px body / 20px readable content across the app",
+    ],
+  },
   {
     version: "v0.6.0",
     date: "Jul 5, 2026",
@@ -510,31 +737,84 @@ const CHANGELOG_ENTRIES = [
 ];
 
 function ChangelogPage() {
+  const { toast } = useToast();
+  const [versionFilter, setVersionFilter] = useState<string>("all");
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
+
+  const versions = ["all", ...CHANGELOG_ENTRIES.map((e) => e.version)];
+  const filtered =
+    versionFilter === "all"
+      ? CHANGELOG_ENTRIES
+      : CHANGELOG_ENTRIES.filter((e) => e.version === versionFilter);
+
+  async function copyHash(hash: string) {
+    try {
+      await navigator.clipboard.writeText(hash);
+      setCopiedHash(hash);
+      toast(`Copied ${hash}`, "success");
+      setTimeout(() => setCopiedHash(null), 2000);
+    } catch {
+      toast("Couldn't copy hash", "error");
+    }
+  }
+
   return (
-    <div className="panel page-panel">
+    <div className="panel page-panel page-panel-dense page-enter">
       <p className="eyebrow">// build history</p>
       <h1>What's shipped, in order.</h1>
-      <div className="changelog-list">
-        {CHANGELOG_ENTRIES.map((entry, i) => (
-          <div className="changelog-entry" key={entry.version}>
-            <div className="changelog-line-col">
-              <div className="changelog-dot" />
-              {i < CHANGELOG_ENTRIES.length - 1 && <div className="changelog-line" />}
-            </div>
-            <div className="changelog-body">
-              <div className="changelog-head">
-                <span className="changelog-version">{entry.version}</span>
-                <span className="changelog-hash">{entry.hash}</span>
-                <span className="changelog-date">{entry.date}</span>
-              </div>
-              <ul className="changelog-changes">
-                {entry.changes.map((c) => (
-                  <li key={c}>{c}</li>
-                ))}
-              </ul>
-            </div>
+      <p className="lede page-lede-compact">
+        Filter by version or click a commit hash to copy it.
+      </p>
+
+      <div className="changelog-terminal">
+        <div className="changelog-terminal-bar">
+          <div className="changelog-terminal-title">
+            <span className="terminal-dot terminal-dot-del" />
+            <span className="terminal-dot terminal-dot-add" />
+            <span className="terminal-dot terminal-dot-pop" />
+            <span className="changelog-terminal-label">git log --oneline repo-to-video</span>
           </div>
-        ))}
+          <div className="changelog-filters" role="tablist" aria-label="Filter by version">
+            {versions.map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                aria-selected={versionFilter === v}
+                className={`changelog-filter ${versionFilter === v ? "changelog-filter-active" : ""}`}
+                onClick={() => setVersionFilter(v)}
+              >
+                {v === "all" ? "all" : v.replace("v", "")}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="changelog-log">
+          {filtered.map((entry) => (
+            <div className="changelog-log-entry" key={entry.version}>
+              <span className="changelog-log-marker">*</span>
+              <div className="changelog-log-body">
+                <div className="changelog-log-head">
+                  <span className="changelog-log-version">{entry.version}</span>
+                  <button
+                    type="button"
+                    className={`changelog-log-hash ${copiedHash === entry.hash ? "changelog-log-hash-copied" : ""}`}
+                    onClick={() => copyHash(entry.hash)}
+                    title="Click to copy hash"
+                  >
+                    {copiedHash === entry.hash ? "copied!" : entry.hash}
+                  </button>
+                  <span className="changelog-log-date">{entry.date}</span>
+                </div>
+                <ul className="changelog-log-changes">
+                  {entry.changes.map((c) => (
+                    <li key={c}>{c}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

@@ -16,18 +16,18 @@
   --mono: "JetBrains Mono", ui-monospace, monospace;
   --sans: "Inter", -apple-system, sans-serif;
 
-  /* Typography scale */
-  --text-body: 17px;
-  --text-body-sm: 15px;
-  --text-body-xs: 13.5px;
-  --text-body-lg: 19px;
+  /* Typography scale — 18–19px body minimum, 20px+ for readable content */
+  --text-body: 18px;
+  --text-body-sm: 16px;
+  --text-body-xs: 14.5px;
+  --text-body-lg: 20px;
   --text-display-xl: 52px;
   --text-display-lg: 36px;
-  --text-display-md: 24px;
-  --text-display-sm: 20px;
-  --text-mono: 15px;
-  --text-mono-sm: 14px;
-  --text-mono-xs: 13px;
+  --text-display-md: 26px;
+  --text-display-sm: 21px;
+  --text-mono: 16px;
+  --text-mono-sm: 15px;
+  --text-mono-xs: 14px;
   --line-body: 1.62;
   --line-relaxed: 1.75;
   --line-tight: 1.12;
