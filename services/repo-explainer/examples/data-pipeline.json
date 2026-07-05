@@ -1,0 +1,41 @@
+{
+  "persona": "senior_engineer",
+  "file_tree": [
+    "src/ingest/fetch_events.py",
+    "src/ingest/kafka_consumer.py",
+    "src/transform/clean.py",
+    "src/transform/enrich.py",
+    "src/transform/aggregate.py",
+    "src/load/warehouse.py",
+    "src/load/schema.sql",
+    "src/orchestration/dag.py",
+    "src/config.py",
+    "tests/test_transform.py",
+    "pyproject.toml",
+    "README.md"
+  ],
+  "readme": "# events-pipeline\n\nAn ETL pipeline that ingests clickstream events from Kafka, cleans and enriches them, aggregates hourly rollups, and loads them into a Postgres warehouse. Scheduled with Airflow (see orchestration/dag.py). Run a backfill with `python -m src.orchestration.dag --backfill 2024-01-01`.",
+  "package_manifest": {
+    "project": { "name": "events-pipeline" },
+    "dependencies": ["confluent-kafka", "pandas", "sqlalchemy", "apache-airflow", "pydantic"]
+  },
+  "key_files": [
+    {
+      "path": "src/orchestration/dag.py",
+      "content": "from airflow import DAG\nfrom airflow.operators.python import PythonOperator\nfrom src.ingest.kafka_consumer import consume_batch\nfrom src.transform.clean import clean\nfrom src.transform.enrich import enrich\nfrom src.transform.aggregate import hourly_rollup\nfrom src.load.warehouse import load\n\nwith DAG('events', schedule_interval='@hourly') as dag:\n    t1 = PythonOperator(task_id='consume', python_callable=consume_batch)\n    t2 = PythonOperator(task_id='clean', python_callable=clean)\n    t3 = PythonOperator(task_id='enrich', python_callable=enrich)\n    t4 = PythonOperator(task_id='aggregate', python_callable=hourly_rollup)\n    t5 = PythonOperator(task_id='load', python_callable=load)\n    t1 >> t2 >> t3 >> t4 >> t5"
+    },
+    {
+      "path": "src/transform/enrich.py",
+      "content": "import pandas as pd\nfrom src.config import GEO_DB\n\ndef enrich(df: pd.DataFrame) -> pd.DataFrame:\n    geo = pd.read_parquet(GEO_DB)\n    return df.merge(geo, on='ip_prefix', how='left')"
+    },
+    {
+      "path": "src/load/warehouse.py",
+      "content": "from sqlalchemy import create_engine\nfrom src.config import WAREHOUSE_URL\n\nengine = create_engine(WAREHOUSE_URL)\n\ndef load(df):\n    df.to_sql('hourly_events', engine, if_exists='append', index=False, method='multi')"
+    }
+  ],
+  "recent_commits": [
+    { "sha": "aa10bb2", "author": "Wei", "message": "Add geo enrichment step via parquet join" },
+    { "sha": "cc30dd4", "author": "Wei", "message": "Switch warehouse load to multi-row insert" },
+    { "sha": "ee50ff6", "author": "Marta", "message": "Backfill support in orchestration DAG" }
+  ]
+}

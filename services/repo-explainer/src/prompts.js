@@ -10,10 +10,15 @@ export function normalizePersona(persona) {
 }
 
 // Per-section spoken-word budget. HeyGen caps a single avatar script at 5,000
-// characters (~3 min); 150-200 words (~60-90s) reads best and keeps each
-// section comfortably under the limit. ~200 words ~= 1,200 chars.
+// characters (~3 min); ~150-200 words (~60-90s) reads best.
+//   - TARGET is what we ask Qwen to hit.
+//   - BOUNDS is the acceptable range we validate against; sections outside it
+//     trigger one targeted resize retry.
 export const SECTION_WORD_TARGET = { min: 150, max: 200 };
-export const SECTION_CHAR_HARDCAP = 1400;
+export const SECTION_WORD_BOUNDS = { min: 100, max: 250 };
+// Char safety net for HeyGen. 250 words ~= 1,650 chars, so 1,800 leaves headroom
+// for an acceptable section while still truncating truly runaway output.
+export const SECTION_CHAR_HARDCAP = 1800;
 
 function personaGuidance(persona) {
   if (persona === "new_grad") {
@@ -59,16 +64,25 @@ export function buildArchitectureMessages(context, persona) {
 
 export function buildNarrationMessages(architectureSummary, persona) {
   const system = [
-    "You convert software architecture write-ups into friendly, spoken-style narration scripts for a video walkthrough aimed at a new hire's first day.",
+    "You are writing what a friendly senior engineer would SAY out loud while walking a new hire through a codebase on their first day. This is a spoken video script, not documentation.",
     "",
-    "RULES:",
-    "- Write like you're talking, not writing documentation. Use contractions, short sentences. NO bullet points, NO markdown, NO headers, NO lists inside the script text.",
-    "- Never say things like \"This directory contains the following files\". Explain what the code DOES and WHY it's structured that way, in plain conversational language.",
-    `- Break it into sections. ALWAYS start with an "Overview" section (60-90 seconds when read aloud, ~${SECTION_WORD_TARGET.min}-${SECTION_WORD_TARGET.max} words), then one section per major module/folder (60-90 seconds each, ~${SECTION_WORD_TARGET.min}-${SECTION_WORD_TARGET.max} words).`,
-    `- Keep EVERY section between ${SECTION_WORD_TARGET.min} and ${SECTION_WORD_TARGET.max} words. This is a hard requirement — a downstream text-to-video service rejects long scripts.`,
-    "- Each section should explain WHAT the code does and WHY it's structured that way, referencing real file names naturally (say them the way a person would, e.g. \"the server dot js file\" is fine, or just \"server.js\").",
-    "- End the Overview section with a natural transition sentence that leads into the first deep-dive section.",
-    "- Do not invent files or behavior that isn't supported by the summary.",
+    "VOICE AND STYLE (most important):",
+    "- Write exactly how a person talks. Use contractions (it's, we're, you'll, that's). Keep sentences short and punchy.",
+    "- NO markdown, NO headers, NO bullet points, NO lists, NO code blocks inside the script text. Just flowing spoken sentences.",
+    "- Address the listener directly as \"you\" and use \"we\"/\"our\" for the team. It should feel warm and human.",
+    "- BANNED phrasings (never write anything like these): \"This module contains...\", \"This directory contains the following files\", \"The following components...\", \"It is responsible for...\", \"This section will cover...\". These sound like docs being read aloud and will ruin the video.",
+    "- Instead, narrate: e.g. \"So when a request comes in, it first hits server.js, which is basically the front door...\"",
+    "",
+    "CONTENT:",
+    "- Be specific to THIS repo. Name real files and folders from the summary (like server.js, the routes folder, auth.js) and say what each actually does. Generic narration that could describe any project is a failure.",
+    "- For each section explain WHAT the code does AND WHY it's built that way.",
+    "- Do not invent files, behavior, or tech that isn't in the summary.",
+    "",
+    "STRUCTURE:",
+    "- ALWAYS start with an \"Overview\" section, then one section per major module/folder.",
+    `- Every section MUST be between ${SECTION_WORD_TARGET.min} and ${SECTION_WORD_TARGET.max} words (~60-90 seconds spoken). Never under ${SECTION_WORD_BOUNDS.min} or over ${SECTION_WORD_BOUNDS.max} words — a downstream text-to-video service rejects long scripts, and very short sections feel abrupt. Keep the sections roughly even in length.`,
+    "- End the Overview with a natural transition sentence that leads into the first deep-dive section (e.g. \"Let's start with how requests actually get handled.\").",
+    "- Before finishing, silently check each section's word count is in range and rewrite any that aren't.",
     "",
     personaGuidance(persona),
     "",
@@ -80,6 +94,33 @@ export function buildNarrationMessages(architectureSummary, persona) {
     "",
     "ARCHITECTURE SUMMARY:",
     architectureSummary,
+  ].join("\n");
+
+  return { system, user };
+}
+
+// Targeted resize for a single section that fell outside the word bounds.
+export function buildSectionResizeMessages(section, direction, persona) {
+  const { min, max } = SECTION_WORD_TARGET;
+  const action =
+    direction === "shorten"
+      ? `It is too long. Rewrite it to be SHORTER — between ${min} and ${max} words — while keeping the most important, repo-specific points.`
+      : `It is too short. Rewrite it to be LONGER — between ${min} and ${max} words — by adding more concrete detail about what the code does and why, referencing real file names. Do not pad with filler.`;
+
+  const system = [
+    "You revise a single spoken narration section for a codebase walkthrough video.",
+    action,
+    "Keep the same friendly, spoken style: contractions, short sentences, no markdown, no bullet points, no headers.",
+    "Do not add files or behavior that weren't already implied by the section.",
+    personaGuidance(persona),
+    'Output ONLY valid JSON in exactly this shape, no code fences: { "title": string, "script": string }',
+  ].join("\n");
+
+  const user = [
+    `SECTION TITLE: ${section.title}`,
+    "",
+    "CURRENT SCRIPT:",
+    section.script,
   ].join("\n");
 
   return { system, user };

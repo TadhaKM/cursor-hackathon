@@ -1,4 +1,25 @@
-import { SECTION_CHAR_HARDCAP } from "./prompts.js";
+import { SECTION_CHAR_HARDCAP, SECTION_WORD_BOUNDS } from "./prompts.js";
+
+/**
+ * Decide whether a section is outside the acceptable word range.
+ * @returns {"shorten" | "lengthen" | null}
+ */
+export function classifySectionLength(wordCount) {
+  if (wordCount > SECTION_WORD_BOUNDS.max) return "shorten";
+  if (wordCount < SECTION_WORD_BOUNDS.min) return "lengthen";
+  return null;
+}
+
+// Recompute derived counts for a section after its script changes.
+export function withCounts(section) {
+  const script = capScript(section.script ?? "");
+  return {
+    title: String(section.title ?? "").trim() || "Section",
+    script,
+    word_count: countWords(script),
+    char_count: script.length,
+  };
+}
 
 export function countWords(str) {
   return (String(str).match(/\b[\w'-]+\b/g) || []).length;

@@ -8,6 +8,31 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
+// Catch malformed JSON bodies from express.json() and return a clean 400
+// instead of letting a SyntaxError bubble up as an HTML stack trace.
+app.use((err, _req, res, next) => {
+  if (err && (err.type === "entity.parse.failed" || err instanceof SyntaxError)) {
+    return res.status(400).json({
+      error: "Malformed JSON in request body.",
+      kind: "bad_request",
+    });
+  }
+  if (err && err.type === "entity.too.large") {
+    return res
+      .status(413)
+      .json({ error: "Request body too large.", kind: "bad_request" });
+  }
+  return next(err);
+});
+
+// Turns any error into a clean JSON response with a sensible status code.
+function sendError(res, route, err) {
+  const status = err?.statusCode ?? 502;
+  const kind = err?.kind ?? "upstream";
+  console.error(`[${route}] (${status}/${kind}) ${err?.message ?? err}`);
+  res.status(status).json({ error: err?.message ?? "Unexpected error", kind });
+}
+
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
@@ -21,14 +46,15 @@ app.post("/explain", async (req, res) => {
   try {
     assertApiKey();
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message, kind: "config" });
   }
 
   const body = req.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return res
-      .status(400)
-      .json({ error: "Request body must be a JSON object with the ingestion fields." });
+    return res.status(400).json({
+      error: "Request body must be a JSON object with the ingestion fields.",
+      kind: "bad_request",
+    });
   }
 
   const includeDiagram =
@@ -49,9 +75,7 @@ app.post("/explain", async (req, res) => {
       },
     });
   } catch (err) {
-    const status = err.statusCode ?? 502;
-    console.error(`[/explain] ${err.message}`);
-    res.status(status).json({ error: err.message });
+    sendError(res, "/explain", err);
   }
 });
 
@@ -61,23 +85,22 @@ app.post("/chat", async (req, res) => {
   try {
     assertApiKey();
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: err.message, kind: "config" });
   }
 
   const body = req.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return res
-      .status(400)
-      .json({ error: "Request body must be a JSON object with ingestion fields and a 'question'." });
+    return res.status(400).json({
+      error: "Request body must be a JSON object with ingestion fields and a 'question'.",
+      kind: "bad_request",
+    });
   }
 
   try {
     const { answer, sources } = await answerQuestion(body, body.question);
     res.json({ answer, sources, meta: { model: config.model } });
   } catch (err) {
-    const status = err.statusCode ?? 502;
-    console.error(`[/chat] ${err.message}`);
-    res.status(status).json({ error: err.message });
+    sendError(res, "/chat", err);
   }
 });
 

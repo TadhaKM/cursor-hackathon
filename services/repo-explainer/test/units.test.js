@@ -11,6 +11,9 @@ import {
 import { normalizePersona, SECTION_CHAR_HARDCAP } from "../src/prompts.js";
 import { parseNarration, capScript, countWords } from "../src/narration.js";
 import { buildChunks, retrieve } from "../src/rag.js";
+import { classifySectionLength, withCounts } from "../src/narration.js";
+import { refineSectionLengths } from "../src/explain.js";
+import { classifyQwenError } from "../src/qwenClient.js";
 
 test("cleanMermaid strips code fences and prose preamble", () => {
   const raw = "Here you go:\n```mermaid\ngraph TD\n  A[App] --> B[DB]\n```";
@@ -129,4 +132,62 @@ test("retrieve returns empty when nothing matches", () => {
     key_files: [{ path: "a.js", content: "export const x = 1;" }],
   });
   assert.deepEqual(retrieve(chunks, "zzzznomatch quxblah"), []);
+});
+
+test("classifySectionLength flags short/long/ok sections", () => {
+  assert.equal(classifySectionLength(50), "lengthen");
+  assert.equal(classifySectionLength(400), "shorten");
+  assert.equal(classifySectionLength(175), null);
+});
+
+test("refineSectionLengths resizes only out-of-range sections", async () => {
+  const words = (n) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
+  const sections = [
+    withCounts({ title: "Overview", script: words(175) }), // in range -> untouched
+    withCounts({ title: "Tiny", script: words(40) }), // too short -> resized
+  ];
+
+  const calls = [];
+  const fakeChat = async ({ label }) => {
+    calls.push(label);
+    // Return a well-formed, in-range section.
+    return JSON.stringify({ title: "Tiny", script: words(170) });
+  };
+
+  const out = await refineSectionLengths(sections, null, fakeChat);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].word_count, 175); // unchanged
+  assert.equal(calls.length, 1); // only the short one triggered a call
+  assert.match(calls[0], /lengthen/);
+  assert.equal(classifySectionLength(out[1].word_count), null);
+});
+
+test("refineSectionLengths keeps original when resize call fails", async () => {
+  const words = (n) => Array.from({ length: n }, (_, i) => `w${i}`).join(" ");
+  const sections = [withCounts({ title: "Big", script: words(300) })];
+  const fakeChat = async () => {
+    throw new Error("boom");
+  };
+  const out = await refineSectionLengths(sections, null, fakeChat);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].title, "Big");
+});
+
+test("classifyQwenError maps timeout/auth/other to status codes", () => {
+  assert.deepEqual(classifyQwenError({ code: "ETIMEDOUT" }), {
+    statusCode: 504,
+    kind: "timeout",
+  });
+  assert.deepEqual(classifyQwenError({ message: "Request timed out" }), {
+    statusCode: 504,
+    kind: "timeout",
+  });
+  assert.deepEqual(classifyQwenError({ status: 401 }), {
+    statusCode: 500,
+    kind: "auth",
+  });
+  assert.deepEqual(classifyQwenError({ status: 500 }), {
+    statusCode: 502,
+    kind: "upstream",
+  });
 });

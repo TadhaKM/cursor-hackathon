@@ -1,0 +1,44 @@
+{
+  "persona": "new_grad",
+  "file_tree": [
+    "bin/imgshrink.js",
+    "src/cli.js",
+    "src/resize.js",
+    "src/formats.js",
+    "src/config.js",
+    "src/logger.js",
+    "test/resize.test.js",
+    "package.json",
+    "README.md"
+  ],
+  "readme": "# imgshrink\n\nA command-line tool that batch-resizes and re-encodes images. Point it at a folder, give it a max width, and it writes optimized copies to an output dir. Supports JPEG, PNG, and WebP. Usage: `imgshrink ./photos --width 1200 --format webp --out ./dist`.",
+  "package_manifest": {
+    "name": "imgshrink",
+    "bin": { "imgshrink": "bin/imgshrink.js" },
+    "dependencies": { "sharp": "^0.33.0", "commander": "^12.0.0", "picocolors": "^1.0.0" },
+    "scripts": { "test": "node --test" }
+  },
+  "key_files": [
+    {
+      "path": "bin/imgshrink.js",
+      "content": "#!/usr/bin/env node\nimport { run } from '../src/cli.js';\nrun(process.argv);"
+    },
+    {
+      "path": "src/cli.js",
+      "content": "import { Command } from 'commander';\nimport { resizeDir } from './resize.js';\nimport { loadConfig } from './config.js';\nimport { logger } from './logger.js';\n\nexport function run(argv) {\n  const program = new Command();\n  program\n    .argument('<input>')\n    .option('--width <n>', 'max width', '1200')\n    .option('--format <fmt>', 'output format', 'webp')\n    .option('--out <dir>', 'output dir', './dist')\n    .action(async (input, opts) => {\n      const cfg = loadConfig(opts);\n      const n = await resizeDir(input, cfg);\n      logger.info(`done: ${n} images`);\n    });\n  program.parse(argv);\n}"
+    },
+    {
+      "path": "src/resize.js",
+      "content": "import sharp from 'sharp';\nimport { readdir } from 'node:fs/promises';\nimport { encoderFor } from './formats.js';\n\nexport async function resizeDir(dir, cfg) {\n  const files = await readdir(dir);\n  let count = 0;\n  for (const f of files) {\n    const pipeline = sharp(`${dir}/${f}`).resize({ width: cfg.width });\n    await encoderFor(cfg.format)(pipeline).toFile(`${cfg.out}/${f}`);\n    count++;\n  }\n  return count;\n}"
+    },
+    {
+      "path": "src/formats.js",
+      "content": "export function encoderFor(fmt) {\n  if (fmt === 'webp') return (p) => p.webp({ quality: 80 });\n  if (fmt === 'png') return (p) => p.png({ compressionLevel: 9 });\n  return (p) => p.jpeg({ quality: 82 });\n}"
+    }
+  ],
+  "recent_commits": [
+    { "sha": "11aa22b", "author": "Priya", "message": "Add WebP encoder and --format flag" },
+    { "sha": "33cc44d", "author": "Priya", "message": "Stream directory reads to cut memory use" },
+    { "sha": "55ee66f", "author": "Leo", "message": "Extract encoder selection into formats.js" }
+  ]
+}

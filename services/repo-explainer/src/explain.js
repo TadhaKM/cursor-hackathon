@@ -4,10 +4,66 @@ import {
   buildArchitectureMessages,
   buildNarrationMessages,
   buildMermaidMessages,
+  buildSectionResizeMessages,
   normalizePersona,
+  SECTION_WORD_BOUNDS,
 } from "./prompts.js";
 import { validateMermaid } from "./mermaid.js";
-import { parseNarration } from "./narration.js";
+import {
+  parseNarration,
+  classifySectionLength,
+  withCounts,
+} from "./narration.js";
+
+// For each section outside the acceptable word range, make ONE targeted resize
+// call. If it's still out of range afterwards, keep it and log a warning rather
+// than failing the whole request.
+export async function refineSectionLengths(sections, persona, chatFn = chat) {
+  const refined = [];
+  for (const section of sections) {
+    const direction = classifySectionLength(section.word_count);
+    if (!direction) {
+      refined.push(section);
+      continue;
+    }
+
+    const verb = direction === "shorten" ? "shorten" : "lengthen";
+    try {
+      const msgs = buildSectionResizeMessages(section, verb, persona);
+      const raw = await chatFn({
+        ...msgs,
+        json: true,
+        temperature: 0.5,
+        label: `narration-resize:${verb}`,
+      });
+      const parsed = JSON.parse(stripFences(raw));
+      const next = withCounts({
+        title: parsed.title ?? section.title,
+        script: parsed.script ?? section.script,
+      });
+
+      if (classifySectionLength(next.word_count)) {
+        console.warn(
+          `[narration] section "${next.title}" still ${next.word_count} words ` +
+            `after resize (want ${SECTION_WORD_BOUNDS.min}-${SECTION_WORD_BOUNDS.max}); keeping as-is.`
+        );
+      }
+      refined.push(next);
+    } catch (err) {
+      console.warn(
+        `[narration] resize of section "${section.title}" failed (${err.message}); keeping original.`
+      );
+      refined.push(section);
+    }
+  }
+  return refined;
+}
+
+function stripFences(text) {
+  const s = String(text).trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  return fence ? fence[1].trim() : s;
+}
 
 async function generateMermaid(context, architectureSummary) {
   // First attempt.
@@ -58,6 +114,7 @@ export async function explainRepo(payload = {}, opts = {}) {
       "Ingestion payload had no usable content (file_tree, readme, key_files, recent_commits, or package_manifest required)."
     );
     err.statusCode = 400;
+    err.kind = "bad_request";
     throw err;
   }
 
@@ -80,6 +137,11 @@ export async function explainRepo(payload = {}, opts = {}) {
     label: "narration",
   });
   const narrationScript = parseNarration(narrationRaw);
+  // Enforce per-section word bounds with one targeted resize retry each.
+  narrationScript.sections = await refineSectionLengths(
+    narrationScript.sections,
+    persona
+  );
 
   // 3) Mermaid diagram (best-effort; may be null).
   const mermaidDiagram = includeDiagram

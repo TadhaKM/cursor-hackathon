@@ -99,6 +99,7 @@ export async function answerQuestion(payload, question) {
   if (!question || !String(question).trim()) {
     const err = new Error("A non-empty 'question' is required.");
     err.statusCode = 400;
+    err.kind = "bad_request";
     throw err;
   }
 
