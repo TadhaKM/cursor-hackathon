@@ -2,18 +2,21 @@ import OpenAI from "openai";
 import { config } from "./config.js";
 
 // Typed error so the HTTP layer can map failures to clean status codes.
-export class QwenError extends Error {
+export class LlmError extends Error {
   constructor(message, { statusCode = 502, kind = "upstream", cause } = {}) {
     super(message);
-    this.name = "QwenError";
+    this.name = "LlmError";
     this.statusCode = statusCode;
     this.kind = kind;
     if (cause) this.cause = cause;
   }
 }
 
+/** @deprecated use classifyLlmError */
+export const classifyQwenError = classifyLlmError;
+
 // Map a raw SDK/network error to a (statusCode, kind) pair.
-export function classifyQwenError(err) {
+export function classifyLlmError(err) {
   const status = err?.status ?? err?.response?.status;
   const code = err?.code;
   const name = err?.name ?? "";
@@ -33,15 +36,14 @@ export function classifyQwenError(err) {
     err instanceof OpenAI.AuthenticationError ||
     err instanceof OpenAI.PermissionDeniedError ||
     status === 401 ||
-    status === 403;
+    status === 403 ||
+    status === 400 && msg.includes("api key");
   if (isAuth) return { statusCode: 500, kind: "auth" };
 
   return { statusCode: 502, kind: "upstream" };
 }
 
-// Single OpenAI-compatible client pointed at Qwen Model Studio.
-// The SDK's built-in `maxRetries` is disabled; we handle retries ourselves so
-// the semantics ("1 retry per call") are explicit and easy to reason about.
+// OpenAI-compatible client pointed at Google AI Studio (Gemini).
 let client = null;
 function getClient() {
   if (!client) {
@@ -60,8 +62,7 @@ function sleep(ms) {
 }
 
 /**
- * Run a single chat completion against Qwen with an explicit timeout and a
- * bounded number of retries.
+ * Run a single chat completion with an explicit timeout and bounded retries.
  *
  * @param {object} opts
  * @param {string} opts.system        System prompt.
@@ -76,7 +77,7 @@ export async function chat({
   user,
   json = false,
   temperature = 0.4,
-  label = "qwen-call",
+  label = "llm-call",
 }) {
   const attempts = config.maxRetries + 1;
   let lastError;
@@ -98,7 +99,7 @@ export async function chat({
 
       const content = response?.choices?.[0]?.message?.content;
       if (!content || !content.trim()) {
-        throw new Error("Qwen returned an empty response");
+        throw new Error("Model returned an empty response");
       }
       return content.trim();
     } catch (err) {
@@ -107,27 +108,25 @@ export async function chat({
       console.warn(
         `[${label}] attempt ${attempt}/${attempts} failed: ${err?.message ?? err}`
       );
-      // An auth failure won't fix itself on retry — fail fast and log loudly.
-      const { kind } = classifyQwenError(err);
+      const { kind } = classifyLlmError(err);
       if (kind === "auth") {
         console.error(
-          `[${label}] AUTH ERROR from Qwen — check QWEN_API_KEY / QWEN_BASE_URL. ${err?.message ?? err}`
+          `[${label}] AUTH ERROR — check GEMINI_API_KEY. ${err?.message ?? err}`
         );
         break;
       }
       if (isLast) break;
-      // Short linear backoff before the single retry.
       await sleep(750 * attempt);
     }
   }
 
-  const { statusCode, kind } = classifyQwenError(lastError);
+  const { statusCode, kind } = classifyLlmError(lastError);
   const message = lastError?.message ?? String(lastError);
   const readable =
     kind === "timeout"
-      ? `Qwen call "${label}" timed out after ${config.timeoutMs}ms (${attempts} attempt(s)).`
+      ? `LLM call "${label}" timed out after ${config.timeoutMs}ms (${attempts} attempt(s)).`
       : kind === "auth"
-        ? `Qwen authentication failed for call "${label}". Check QWEN_API_KEY.`
-        : `Qwen call "${label}" failed after ${attempts} attempt(s): ${message}`;
-  throw new QwenError(readable, { statusCode, kind, cause: lastError });
+        ? `LLM authentication failed for call "${label}". Check GEMINI_API_KEY.`
+        : `LLM call "${label}" failed after ${attempts} attempt(s): ${message}`;
+  throw new LlmError(readable, { statusCode, kind, cause: lastError });
 }

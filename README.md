@@ -17,7 +17,7 @@ Everything backend-shaped lives in `src/mockApi.ts`. Replace `runPipeline`
 with real calls once endpoints exist:
 
 - **Person 1** — repo ingestion: `GET /repo-summary-input?url=...`
-- **Person 2** — Qwen summary + narration script: `POST /explain`
+- **Person 2** — Gemini summary + narration script: `POST /explain`
   (see `services/repo-explainer/`)
 - **Person 3** — HeyGen video generation (async, needs polling)
 

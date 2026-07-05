@@ -1,7 +1,7 @@
 {
   "name": "repo-explainer",
   "version": "1.0.0",
-  "description": "Turns repo ingestion output into an architecture summary, a spoken narration script, and a Mermaid diagram using Alibaba Qwen (Model Studio).",
+  "description": "Turns repo ingestion output into an architecture summary, a spoken narration script, and a Mermaid diagram using Google AI Studio (Gemini).",
   "type": "module",
   "main": "src/server.js",
   "scripts": {

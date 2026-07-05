@@ -1,5 +1,5 @@
 // Sanity-check narration in non-English languages against the same mock repo.
-// Usage: QWEN_API_KEY=sk-... node scripts/language-test.js
+// Usage: GEMINI_API_KEY=AIza... node scripts/language-test.js
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -73,7 +73,7 @@ async function runLanguage(langCode) {
 
 async function main() {
   if (!config.apiKey) {
-    console.error("QWEN_API_KEY is not set.");
+    console.error("GEMINI_API_KEY is not set.");
     process.exit(1);
   }
 

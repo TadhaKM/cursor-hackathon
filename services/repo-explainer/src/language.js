@@ -1,5 +1,5 @@
 // Supported narration languages. Codes are BCP-47-ish (ISO 639-1).
-// `name` is the full language name passed into Qwen prompts.
+// `name` is the full language name passed into LLM prompts.
 
 export const LANGUAGES = {
   en: { code: "en", name: "English" },

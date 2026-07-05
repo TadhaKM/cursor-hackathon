@@ -6,21 +6,25 @@ function int(value, fallback) {
 }
 
 export const config = {
-  apiKey: process.env.QWEN_API_KEY ?? "",
+  // Google AI Studio key from https://aistudio.google.com/apikey
+  apiKey:
+    process.env.GEMINI_API_KEY ??
+    process.env.GOOGLE_API_KEY ??
+    "",
   baseUrl:
-    process.env.QWEN_BASE_URL ??
-    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-  model: process.env.QWEN_MODEL ?? "qwen-max",
-  timeoutMs: int(process.env.QWEN_TIMEOUT_MS, 30000),
+    process.env.GEMINI_BASE_URL ??
+    "https://generativelanguage.googleapis.com/v1beta/openai/",
+  model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
+  timeoutMs: int(process.env.GEMINI_TIMEOUT_MS, 30000),
   port: int(process.env.PORT, 8787),
-  // 1 retry means 2 total attempts per Qwen call.
-  maxRetries: int(process.env.QWEN_MAX_RETRIES, 1),
+  // 1 retry means 2 total attempts per call.
+  maxRetries: int(process.env.GEMINI_MAX_RETRIES, 1),
 };
 
 export function assertApiKey() {
   if (!config.apiKey) {
     throw new Error(
-      "QWEN_API_KEY is not set. Copy .env.example to .env and add your Model Studio key."
+      "GEMINI_API_KEY is not set. Copy .env.example to .env and add your Google AI Studio key from https://aistudio.google.com/apikey"
     );
   }
 }
