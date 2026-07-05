@@ -1,3 +1,18 @@
+"""video-renderer — turns narration sections into HeyGen talking-avatar videos
+and renders the mermaid diagram to a PNG (via Kroki). Stage 3 of 3.
+
+    GET  /health
+    POST /render            { sections, mermaid_diagram? } -> { job_id, ... }
+    GET  /render/{job_id}   -> job status + video_urls + diagram_image_url
+    GET  /avatars, /voices  -> HeyGen catalogs (for picking avatar/voice IDs)
+
+Renders are async: /render returns immediately with a job_id, HeyGen jobs run
+in the background (submitted in parallel, ~1-3 min each), and the frontend polls
+/render/{job_id} until status is ready/partial/failed. Job state is in-memory
+(app/store.py), so run a single instance. Set MOCK_VIDEO=true to skip HeyGen and
+return instant placeholder videos.
+"""
+
 import asyncio
 import uuid
 

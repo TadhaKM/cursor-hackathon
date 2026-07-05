@@ -1,3 +1,16 @@
+/**
+ * repo-explainer — turns an ingestion snapshot into the pieces a walkthrough
+ * needs, using an LLM via OpenRouter (OpenAI-compatible). Stage 2 of 3.
+ *
+ *   GET  /health
+ *   POST /explain       ingestion JSON        -> { architecture_summary,
+ *                                                  narration_script, mermaid_diagram }
+ *   POST /explain-diff  ingestion + base/head -> narration of what changed
+ *   POST /chat          ingestion + question  -> grounded RAG answer over the repo
+ *
+ * The LLM client (geminiClient.js) is provider-agnostic OpenAI-compatible;
+ * point it at any provider via OPENROUTER_* / GEMINI_* env vars (see config.js).
+ */
 import express from "express";
 import cors from "cors";
 import { config, assertApiKey } from "./config.js";

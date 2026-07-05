@@ -1,3 +1,17 @@
+/**
+ * repo-ingest — turns a GitHub repo into a compact, token-budgeted JSON
+ * snapshot (file tree, README, key files, recent commits, manifest) for the
+ * rest of the pipeline. Stage 1 of 3.
+ *
+ *   GET  /health
+ *   POST /ingest              { repo_url }                  -> ingestion JSON
+ *   GET  /repo-summary-input  ?url=...                      -> same (query form)
+ *   POST /diff                { repo_url, base, head }      -> changed-files summary
+ *
+ * Responses are cached in-memory (TTLCache) so repeated calls during a demo
+ * don't re-hit the GitHub API. Set GITHUB_TOKEN for higher rate limits and
+ * private-repo access.
+ */
 import "dotenv/config";
 import express from "express";
 import { ingestRepo, GitHubError } from "./ingest.js";
