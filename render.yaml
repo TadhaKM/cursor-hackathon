@@ -40,6 +40,10 @@ services:
     # Render provides $PORT; bind to it and 0.0.0.0.
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      # Pin Python 3.12 — pydantic-core 2.27.1 has no wheel for 3.14 and would
+      # try (and fail) to build from source with Rust on Render's read-only FS.
+      - key: PYTHON_VERSION
+        value: "3.12.7"
       - key: HEYGEN_API_KEY
         sync: false
       - key: HEYGEN_AVATAR_ID
