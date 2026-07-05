@@ -38,7 +38,7 @@ Environment variables (see `.env.example`):
 
 ### `POST /explain`
 
-Body: the ingestion JSON, optionally with a `persona` field.
+Body: the ingestion JSON, optionally with `persona` and `language` fields.
 
 ```jsonc
 {
@@ -47,9 +47,17 @@ Body: the ingestion JSON, optionally with a `persona` field.
   "key_files": [{ "path": "src/server.js", "content": "..." }],
   "recent_commits": [{ "sha": "a1b2c3d", "author": "Dana", "message": "Add auth" }],
   "package_manifest": { "name": "todo-api", "dependencies": { "express": "^4" } },
-  "persona": "new_grad"            // optional: "new_grad" | "senior_engineer"
+  "persona": "new_grad",            // optional: "new_grad" | "senior_engineer"
+  "language": "es"                   // optional: "en" | "es" | "zh" | "hi" (default "en")
 }
 ```
+
+**Language:** `language` controls the **narration script only**. The
+`architecture_summary` always stays in English (for the collapsible summary UI).
+Supported codes: `en`, `es`, `zh`, `hi`. Regional variants like `es-MX` use the
+primary subtag (`es`). The response includes `language` (code) and
+`meta.language_name` (e.g. `"Spanish"`) so the frontend / HeyGen can pick the
+right voice and accent.
 
 Field shapes are flexible: `file_tree` may be an array of paths or a string;
 `key_files` may be an array of `{path, content}` or a `{path: content}` map;
@@ -68,7 +76,15 @@ Response:
     ]
   },
   "mermaid_diagram": "graph TD\n  A[server.js] --> B[routes]",  // string | null
-  "meta": { "persona": "new_grad", "model": "qwen-max", "elapsed_ms": 12873, "section_count": 4 }
+  "language": "es",
+  "meta": {
+    "persona": "new_grad",
+    "language": "es",
+    "language_name": "Spanish",
+    "model": "qwen-max",
+    "elapsed_ms": 12873,
+    "section_count": 4
+  }
 }
 ```
 
@@ -203,6 +219,8 @@ npm test                    # offline unit tests (no API key needed)
 npm run smoke               # full pipeline against real Qwen (needs QWEN_API_KEY)
 npm run smoke -- path/to/ingestion.json
 npm run quality             # narration quality pass over all fixtures (needs QWEN_API_KEY)
+npm run language-test       # Spanish + Chinese sanity check on same mock repo (needs QWEN_API_KEY)
+npm run language-test -- hi # test a specific language code
 ```
 
 Fixtures for the quality pass live in `examples/`:

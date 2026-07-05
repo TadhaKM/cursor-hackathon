@@ -1,6 +1,8 @@
 // Prompt builders. Kept in one place so the narration prompt (the demo-critical
 // one) is easy to iterate on.
 
+import { languageGuidance } from "./language.js";
+
 export const PERSONAS = ["new_grad", "senior_engineer"];
 
 export function normalizePersona(persona) {
@@ -49,6 +51,7 @@ export function buildArchitectureMessages(context, persona) {
     "(4) any notable patterns or conventions used.",
     "Be concrete and reference actual file/folder names.",
     "Output in markdown with clear headers.",
+    "Always write the architecture summary in English, regardless of any other language settings.",
     "",
     personaGuidance(persona),
   ].join("\n");
@@ -62,12 +65,14 @@ export function buildArchitectureMessages(context, persona) {
   return { system, user };
 }
 
-export function buildNarrationMessages(architectureSummary, persona) {
+export function buildNarrationMessages(architectureSummary, persona, language) {
+  const langBlock = languageGuidance(language);
   const system = [
     "You are writing what a friendly senior engineer would SAY out loud while walking a new hire through a codebase on their first day. This is a spoken video script, not documentation.",
     "",
+    ...(langBlock ? [langBlock, ""] : []),
     "VOICE AND STYLE (most important):",
-    "- Write exactly how a person talks. Use contractions (it's, we're, you'll, that's). Keep sentences short and punchy.",
+    "- Write exactly how a person talks. Use contractions where natural in the target language. Keep sentences short and punchy.",
     "- NO markdown, NO headers, NO bullet points, NO lists, NO code blocks inside the script text. Just flowing spoken sentences.",
     "- Address the listener directly as \"you\" and use \"we\"/\"our\" for the team. It should feel warm and human.",
     "- BANNED phrasings (never write anything like these): \"This module contains...\", \"This directory contains the following files\", \"The following components...\", \"It is responsible for...\", \"This section will cover...\". These sound like docs being read aloud and will ruin the video.",
@@ -100,18 +105,20 @@ export function buildNarrationMessages(architectureSummary, persona) {
 }
 
 // Targeted resize for a single section that fell outside the word bounds.
-export function buildSectionResizeMessages(section, direction, persona) {
+export function buildSectionResizeMessages(section, direction, persona, language) {
   const { min, max } = SECTION_WORD_TARGET;
   const action =
     direction === "shorten"
       ? `It is too long. Rewrite it to be SHORTER — between ${min} and ${max} words — while keeping the most important, repo-specific points.`
       : `It is too short. Rewrite it to be LONGER — between ${min} and ${max} words — by adding more concrete detail about what the code does and why, referencing real file names. Do not pad with filler.`;
 
+  const langBlock = languageGuidance(language);
   const system = [
     "You revise a single spoken narration section for a codebase walkthrough video.",
     action,
-    "Keep the same friendly, spoken style: contractions, short sentences, no markdown, no bullet points, no headers.",
+    "Keep the same friendly, spoken style: short sentences, no markdown, no bullet points, no headers.",
     "Do not add files or behavior that weren't already implied by the section.",
+    ...(langBlock ? [langBlock] : []),
     personaGuidance(persona),
     'Output ONLY valid JSON in exactly this shape, no code fences: { "title": string, "script": string }',
   ].join("\n");

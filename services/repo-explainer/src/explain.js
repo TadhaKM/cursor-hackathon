@@ -1,5 +1,6 @@
 import { chat } from "./qwenClient.js";
 import { normalizeIngestion, renderContext, hasUsableContent } from "./ingestion.js";
+import { normalizeLanguage } from "./language.js";
 import {
   buildArchitectureMessages,
   buildNarrationMessages,
@@ -18,10 +19,10 @@ import {
 // For each section outside the acceptable word range, make ONE targeted resize
 // call. If it's still out of range afterwards, keep it and log a warning rather
 // than failing the whole request.
-export async function refineSectionLengths(sections, persona, chatFn = chat) {
+export async function refineSectionLengths(sections, persona, language, chatFn = chat) {
   const refined = [];
   for (const section of sections) {
-    const direction = classifySectionLength(section.word_count);
+    const direction = classifySectionLength(section.word_count, language?.code);
     if (!direction) {
       refined.push(section);
       continue;
@@ -29,7 +30,7 @@ export async function refineSectionLengths(sections, persona, chatFn = chat) {
 
     const verb = direction === "shorten" ? "shorten" : "lengthen";
     try {
-      const msgs = buildSectionResizeMessages(section, verb, persona);
+      const msgs = buildSectionResizeMessages(section, verb, persona, language);
       const raw = await chatFn({
         ...msgs,
         json: true,
@@ -37,12 +38,15 @@ export async function refineSectionLengths(sections, persona, chatFn = chat) {
         label: `narration-resize:${verb}`,
       });
       const parsed = JSON.parse(stripFences(raw));
-      const next = withCounts({
-        title: parsed.title ?? section.title,
-        script: parsed.script ?? section.script,
-      });
+      const next = withCounts(
+        {
+          title: parsed.title ?? section.title,
+          script: parsed.script ?? section.script,
+        },
+        language?.code
+      );
 
-      if (classifySectionLength(next.word_count)) {
+      if (classifySectionLength(next.word_count, language?.code)) {
         console.warn(
           `[narration] section "${next.title}" still ${next.word_count} words ` +
             `after resize (want ${SECTION_WORD_BOUNDS.min}-${SECTION_WORD_BOUNDS.max}); keeping as-is.`
@@ -107,6 +111,7 @@ async function generateMermaid(context, architectureSummary) {
 export async function explainRepo(payload = {}, opts = {}) {
   const { includeDiagram = true } = opts;
   const persona = normalizePersona(payload.persona);
+  const language = normalizeLanguage(payload.language);
 
   const norm = normalizeIngestion(payload);
   if (!hasUsableContent(norm)) {
@@ -129,18 +134,19 @@ export async function explainRepo(payload = {}, opts = {}) {
   });
 
   // 2) Narration script (retries once via qwenClient; parse can also fail).
-  const narrMsgs = buildNarrationMessages(architectureSummary, persona);
+  const narrMsgs = buildNarrationMessages(architectureSummary, persona, language);
   const narrationRaw = await chat({
     ...narrMsgs,
     json: true,
     temperature: 0.6,
-    label: "narration",
+    label: `narration:${language.code}`,
   });
-  const narrationScript = parseNarration(narrationRaw);
+  const narrationScript = parseNarration(narrationRaw, language.code);
   // Enforce per-section word bounds with one targeted resize retry each.
   narrationScript.sections = await refineSectionLengths(
     narrationScript.sections,
-    persona
+    persona,
+    language
   );
 
   // 3) Mermaid diagram (best-effort; may be null).
@@ -153,5 +159,6 @@ export async function explainRepo(payload = {}, opts = {}) {
     narration_script: narrationScript,
     mermaid_diagram: mermaidDiagram,
     persona,
+    language,
   };
 }

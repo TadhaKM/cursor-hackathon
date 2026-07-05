@@ -9,7 +9,8 @@
     "dev": "node --watch src/server.js",
     "smoke": "node scripts/smoke.js",
     "quality": "node scripts/quality-pass.js",
-    "test": "node --test"
+    "language-test": "node scripts/language-test.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"

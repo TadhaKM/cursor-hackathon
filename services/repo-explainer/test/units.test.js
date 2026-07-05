@@ -8,12 +8,13 @@ import {
   renderContext,
   hasUsableContent,
 } from "../src/ingestion.js";
-import { normalizePersona, SECTION_CHAR_HARDCAP } from "../src/prompts.js";
+import { normalizePersona, SECTION_CHAR_HARDCAP, buildNarrationMessages } from "../src/prompts.js";
 import { parseNarration, capScript, countWords } from "../src/narration.js";
 import { buildChunks, retrieve } from "../src/rag.js";
 import { classifySectionLength, withCounts } from "../src/narration.js";
 import { refineSectionLengths } from "../src/explain.js";
 import { classifyQwenError } from "../src/qwenClient.js";
+import { normalizeLanguage, LANGUAGES } from "../src/language.js";
 
 test("cleanMermaid strips code fences and prose preamble", () => {
   const raw = "Here you go:\n```mermaid\ngraph TD\n  A[App] --> B[DB]\n```";
@@ -113,6 +114,28 @@ test("countWords counts words with contractions", () => {
   assert.equal(countWords("It's a well-structured app."), 4);
 });
 
+test("countWords counts CJK characters for Chinese", () => {
+  const zh = "这是一个简单的 REST 服务，入口在 server.js。";
+  assert.ok(countWords(zh, "zh") >= 10);
+});
+
+test("normalizeLanguage accepts codes and regional variants", () => {
+  assert.deepEqual(normalizeLanguage("es"), LANGUAGES.es);
+  assert.deepEqual(normalizeLanguage("es-MX"), LANGUAGES.es);
+  assert.deepEqual(normalizeLanguage(undefined), LANGUAGES.en);
+  assert.throws(() => normalizeLanguage("fr"), /Unsupported language/);
+});
+
+test("normalizeLanguage rejects non-string input", () => {
+  assert.throws(() => normalizeLanguage(42), /Invalid language/);
+});
+
+test("buildNarrationMessages includes full language name for non-English", () => {
+  const { system } = buildNarrationMessages("## Overview\n...", null, LANGUAGES.es);
+  assert.match(system, /Spanish/);
+  assert.match(system, /not a literal translation/i);
+});
+
 test("buildChunks + retrieve surfaces the most relevant key file", () => {
   const payload = {
     key_files: [
@@ -154,7 +177,7 @@ test("refineSectionLengths resizes only out-of-range sections", async () => {
     return JSON.stringify({ title: "Tiny", script: words(170) });
   };
 
-  const out = await refineSectionLengths(sections, null, fakeChat);
+  const out = await refineSectionLengths(sections, null, LANGUAGES.en, fakeChat);
   assert.equal(out.length, 2);
   assert.equal(out[0].word_count, 175); // unchanged
   assert.equal(calls.length, 1); // only the short one triggered a call
@@ -168,7 +191,7 @@ test("refineSectionLengths keeps original when resize call fails", async () => {
   const fakeChat = async () => {
     throw new Error("boom");
   };
-  const out = await refineSectionLengths(sections, null, fakeChat);
+  const out = await refineSectionLengths(sections, null, LANGUAGES.en, fakeChat);
   assert.equal(out.length, 1);
   assert.equal(out[0].title, "Big");
 });
