@@ -43,9 +43,46 @@ export function capScript(script) {
   return `${slice.trim()}…`;
 }
 
+// Extract the first *complete, balanced* JSON object or array from a string,
+// ignoring any prose or extra values the model tacks on afterwards. String
+// contents (and escaped quotes) are skipped so braces inside strings don't
+// throw off the depth count.
+export function extractFirstJsonValue(text) {
+  const objIdx = text.indexOf("{");
+  const arrIdx = text.indexOf("[");
+  let start = -1;
+  if (objIdx === -1) start = arrIdx;
+  else if (arrIdx === -1) start = objIdx;
+  else start = Math.min(objIdx, arrIdx);
+  if (start === -1) return null;
+
+  const open = text[start];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null; // never balanced
+}
+
 /**
  * Parses the narration model output (JSON) into a normalized, HeyGen-safe shape.
- * Accepts stray code fences and a bare array as fallbacks.
+ * Accepts stray code fences, trailing prose, and a bare array as fallbacks.
  * @returns {{ sections: {title:string, script:string, word_count:number, char_count:number}[] }}
  */
 export function parseNarration(raw) {
@@ -57,10 +94,9 @@ export function parseNarration(raw) {
   try {
     parsed = JSON.parse(text);
   } catch {
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start !== -1 && end > start) {
-      parsed = JSON.parse(text.slice(start, end + 1));
+    const candidate = extractFirstJsonValue(text);
+    if (candidate) {
+      parsed = JSON.parse(candidate);
     } else {
       throw new Error("narration response was not valid JSON");
     }

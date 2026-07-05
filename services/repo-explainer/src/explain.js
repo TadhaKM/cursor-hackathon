@@ -13,6 +13,7 @@ import {
   parseNarration,
   classifySectionLength,
   withCounts,
+  extractFirstJsonValue,
 } from "./narration.js";
 
 // For each section outside the acceptable word range, make ONE targeted resize
@@ -36,7 +37,15 @@ export async function refineSectionLengths(sections, persona, chatFn = chat) {
         temperature: 0.5,
         label: `narration-resize:${verb}`,
       });
-      const parsed = JSON.parse(stripFences(raw));
+      const stripped = stripFences(raw);
+      let parsed;
+      try {
+        parsed = JSON.parse(stripped);
+      } catch {
+        const candidate = extractFirstJsonValue(stripped);
+        if (!candidate) throw new Error("resize response was not valid JSON");
+        parsed = JSON.parse(candidate);
+      }
       const next = withCounts({
         title: parsed.title ?? section.title,
         script: parsed.script ?? section.script,
