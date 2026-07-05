@@ -12,14 +12,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-To run without a HeyGen key (frontend dev, demo rehearsal), set in `.env`:
-
-```
-MOCK_VIDEO=true
-```
-
-To render for real, set `HEYGEN_API_KEY`, then fetch avatar/voice IDs and
-set them too:
+Set `HEYGEN_API_KEY`, then fetch avatar/voice IDs and set them too:
 
 ```
 uvicorn app.main:app --reload --port 8000
@@ -96,14 +89,16 @@ Proxies HeyGen's avatar/voice lists — use these once to pick the IDs for
 - A failed HeyGen render is retried once automatically before being marked
   `"failed"` for that section.
 - Diagram rendering uses the public Kroki API (`kroki.io/mermaid/png`) — no
-  local mermaid-cli/puppeteer install needed. It runs even in mock mode
-  since it's free. The rendered PNG is saved to `static/` and served from
-  this same service; set `PUBLIC_BASE_URL` in `.env` once deployed so the
-  returned URL is absolute (e.g. your Render service URL).
+  local mermaid-cli/puppeteer install needed. The rendered PNG is saved to
+  `static/` and served from this same service; set `PUBLIC_BASE_URL` in
+  `.env` once deployed so the returned URL is absolute (e.g. your Render
+  service URL).
 - Confirm HeyGen's `/v2/video/generate` and `/v1/video_status.get` shapes
   against their current docs before a real run — video-gen APIs shift
   between versions and this was built from the partner docs link.
-- `curl` smoke test (mock mode):
+- Rendering requires HeyGen *API* credits on the account — without them,
+  `/render` fails fast with `MOVIO_PAYMENT_INSUFFICIENT_CREDIT`.
+- `curl` smoke test:
   ```
   curl -X POST localhost:8000/render -H 'Content-Type: application/json' \
     -d '{"sections":[{"title":"Overview","script":"hello"}]}'
