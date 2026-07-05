@@ -1,6 +1,6 @@
 // Narration quality pass — runs /explain against every fixture in examples/,
 // prints each section, and flags the three failure modes from the spec.
-// Usage: QWEN_API_KEY=sk-... node scripts/quality-pass.js
+// Usage: GEMINI_API_KEY=... node scripts/quality-pass.js
 import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve, join } from "node:path";
@@ -60,7 +60,7 @@ function analyze(sections, payload) {
 
 async function main() {
   if (!config.apiKey) {
-    console.error("QWEN_API_KEY is not set. Export it, then rerun.");
+    console.error("GEMINI_API_KEY is not set. Export it, then rerun.");
     process.exit(1);
   }
 

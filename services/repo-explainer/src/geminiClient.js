@@ -2,10 +2,10 @@ import OpenAI from "openai";
 import { config } from "./config.js";
 
 // Typed error so the HTTP layer can map failures to clean status codes.
-export class QwenError extends Error {
+export class GeminiError extends Error {
   constructor(message, { statusCode = 502, kind = "upstream", cause } = {}) {
     super(message);
-    this.name = "QwenError";
+    this.name = "GeminiError";
     this.statusCode = statusCode;
     this.kind = kind;
     if (cause) this.cause = cause;
@@ -13,7 +13,7 @@ export class QwenError extends Error {
 }
 
 // Map a raw SDK/network error to a (statusCode, kind) pair.
-export function classifyQwenError(err) {
+export function classifyGeminiError(err) {
   const status = err?.status ?? err?.response?.status;
   const code = err?.code;
   const name = err?.name ?? "";
@@ -56,8 +56,8 @@ export function classifyQwenError(err) {
 }
 
 // Pull a "how long to wait" hint out of a 429 error. Tries the standard
-// Retry-After header, then the RetryInfo/"retry in Xs" hints the Gemini and
-// Qwen compat layers put in the body/message. Falls back to escalating backoff.
+// Retry-After header, then the RetryInfo/"retry in Xs" hints Gemini puts in the
+// body/message. Falls back to escalating backoff.
 export function retryDelayMsFor(err, attempt, capMs = 35000) {
   const header =
     err?.headers?.["retry-after"] ?? err?.response?.headers?.["retry-after"];
@@ -81,7 +81,7 @@ export function retryDelayMsFor(err, attempt, capMs = 35000) {
   return Math.min(5000 * 2 ** (attempt - 1) + 1000, capMs);
 }
 
-// Single OpenAI-compatible client pointed at Qwen Model Studio.
+// Single OpenAI-compatible client pointed at the Gemini API.
 // The SDK's built-in `maxRetries` is disabled; we handle retries ourselves so
 // the semantics ("1 retry per call") are explicit and easy to reason about.
 let client = null;
@@ -102,7 +102,7 @@ function sleep(ms) {
 }
 
 /**
- * Run a single chat completion against Qwen with an explicit timeout and a
+ * Run a single chat completion against Gemini with an explicit timeout and a
  * bounded number of retries.
  *
  * @param {object} opts
@@ -118,7 +118,7 @@ export async function chat({
   user,
   json = false,
   temperature = 0.4,
-  label = "qwen-call",
+  label = "gemini-call",
 }) {
   let lastError;
   // Two independent budgets: transient errors (timeout/upstream) get the small
@@ -146,18 +146,18 @@ export async function chat({
 
       const content = response?.choices?.[0]?.message?.content;
       if (!content || !content.trim()) {
-        throw new Error("Qwen returned an empty response");
+        throw new Error("Gemini returned an empty response");
       }
       return content.trim();
     } catch (err) {
       lastError = err;
-      const { kind } = classifyQwenError(err);
+      const { kind } = classifyGeminiError(err);
       console.warn(`[${label}] attempt failed (${kind}): ${err?.message ?? err}`);
 
       // An auth failure won't fix itself on retry — fail fast and log loudly.
       if (kind === "auth") {
         console.error(
-          `[${label}] AUTH ERROR — check QWEN_API_KEY / QWEN_BASE_URL. ${err?.message ?? err}`
+          `[${label}] AUTH ERROR — check GEMINI_API_KEY / GEMINI_BASE_URL. ${err?.message ?? err}`
         );
         break;
       }
@@ -187,17 +187,17 @@ export async function chat({
     }
   }
 
-  const { statusCode, kind } = classifyQwenError(lastError);
+  const { statusCode, kind } = classifyGeminiError(lastError);
   const message = lastError?.message ?? String(lastError);
   const readable =
     kind === "timeout"
-      ? `Qwen call "${label}" timed out after ${config.timeoutMs}ms.`
+      ? `Gemini call "${label}" timed out after ${config.timeoutMs}ms.`
       : kind === "auth"
-        ? `Qwen authentication failed for call "${label}". Check QWEN_API_KEY.`
+        ? `Gemini authentication failed for call "${label}". Check GEMINI_API_KEY.`
         : kind === "rate_limit"
-          ? `Qwen call "${label}" was rate limited (429) and did not recover after ${config.rateLimitMaxRetries} retries: ${message}`
+          ? `Gemini call "${label}" was rate limited (429) and did not recover after ${config.rateLimitMaxRetries} retries: ${message}`
           : kind === "overloaded"
-            ? `Qwen call "${label}" hit a transient overload (503) and did not recover after ${config.rateLimitMaxRetries} retries: ${message}`
-            : `Qwen call "${label}" failed: ${message}`;
-  throw new QwenError(readable, { statusCode, kind, cause: lastError });
+            ? `Gemini call "${label}" hit a transient overload (503) and did not recover after ${config.rateLimitMaxRetries} retries: ${message}`
+            : `Gemini call "${label}" failed: ${message}`;
+  throw new GeminiError(readable, { statusCode, kind, cause: lastError });
 }

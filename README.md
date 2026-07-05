@@ -42,7 +42,7 @@ VITE_RENDER_URL=http://localhost:8000
 | Terminal | Service | Command |
 |----------|---------|---------|
 | 1 | Person 1 — ingest | `cd repo-ingest && npm install && npm run dev` |
-| 2 | Person 2 — explain + chat | `cd services/repo-explainer && npm install && npm run dev` (needs `QWEN_API_KEY` in `.env`) |
+| 2 | Person 2 — explain + chat | `cd services/repo-explainer && npm install && npm run dev` (needs `GEMINI_API_KEY` in `.env`) |
 | 3 | Person 3 — render | `cd video-renderer && uvicorn app.main:app --reload --port 8000` (`.env` with HeyGen keys or `MOCK_VIDEO=true`) |
 | 4 | Person 4 — frontend | `npm install && npm run dev` |
 
@@ -72,15 +72,15 @@ all three pipeline URLs are set.
   globally, or repo questions after a walkthrough is ready.
 - **Error** — shows which stage failed and the raw error message, with retry.
 
-## Chat (Gemini proxy or Person 2 Qwen RAG)
+## Chat (Gemini proxy or explainer Gemini RAG)
 
-Chat is **separate from the explain pipeline**. Person 2's `/explain` endpoint
-still uses Qwen via `VITE_EXPLAIN_URL`. Chat picks a backend automatically:
+Chat is **separate from the explain pipeline**. The `/explain` endpoint uses
+Gemini via `VITE_EXPLAIN_URL`. Chat picks a backend automatically:
 
 | Config | Repo chat (results page) | Tool chat (floating `?`) | ChatPanel pill |
 |--------|--------------------------|--------------------------|----------------|
 | `VITE_CHAT_URL` set | Gemini proxy (`api/chat.ts`) | Gemini + `TOOL_DOCS` | `● Gemini` |
-| Only `VITE_EXPLAIN_URL` set | Person 2 `POST /chat` (Qwen RAG) | Mock (built-in FAQ text) | `● Qwen (Person 2 RAG)` |
+| Only `VITE_EXPLAIN_URL` set | explainer `POST /chat` (Gemini RAG) | Mock (built-in FAQ text) | `● Gemini (RAG)` |
 | Neither set | Mock | Mock | `○ mock chat` |
 
 Pipeline mock/live (`● live backend` / `○ mock data`) is independent of chat mode.
