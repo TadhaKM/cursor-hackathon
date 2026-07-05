@@ -1,9 +1,23 @@
 import asyncio
+import json
 import time
 
 import httpx
 
 from app import config
+
+
+def _coerce_error(err) -> str | None:
+    """HeyGen sometimes returns `error` as a structured object rather than a
+    string. Normalize it so it fits VideoState.error (Optional[str])."""
+    if err is None:
+        return None
+    if isinstance(err, str):
+        return err
+    try:
+        return json.dumps(err)
+    except (TypeError, ValueError):
+        return str(err)
 
 
 class HeyGenError(Exception):
@@ -73,7 +87,7 @@ async def check_status(video_id: str, client: httpx.AsyncClient) -> dict:
     if status == "completed":
         return {"status": "completed", "video_url": data.get("video_url"), "error": None}
     if status == "failed":
-        return {"status": "failed", "video_url": None, "error": data.get("error")}
+        return {"status": "failed", "video_url": None, "error": _coerce_error(data.get("error"))}
     return {"status": "processing", "video_url": None, "error": None}
 
 

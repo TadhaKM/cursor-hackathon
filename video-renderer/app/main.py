@@ -74,6 +74,20 @@ async def _mock_render_section(title: str) -> dict:
 
 
 async def _run_job(job_id: str, req: RenderRequest) -> None:
+    try:
+        await _run_job_inner(job_id, req)
+    except Exception as exc:  # never leave a job stuck in "processing"
+        job = store.get(job_id)
+        if job is not None:
+            job.status = "failed"
+            job.videos = [
+                VideoState(title=v.title, status="failed", error=f"internal error: {exc}")
+                for v in job.videos
+            ]
+            store.save(job)
+
+
+async def _run_job_inner(job_id: str, req: RenderRequest) -> None:
     job = store.get(job_id)
 
     async with httpx.AsyncClient() as client:
