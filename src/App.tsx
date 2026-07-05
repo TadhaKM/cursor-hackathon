@@ -225,11 +225,11 @@ function chatHint(hasRepo: boolean): string {
       ? "Powered by Gemini — grounded in this repo's actual files."
       : "Powered by Gemini — ask about the pipeline, timing, or limitations.";
   }
-  if (backend === "qwen" && hasRepo) {
-    return "Powered by Qwen RAG — grounded in this repo's key files.";
+  if (backend === "explain" && hasRepo) {
+    return "Powered by Gemini RAG — grounded in this repo's key files.";
   }
   return hasRepo
-    ? "Mock chat — set VITE_EXPLAIN_URL (Qwen) or VITE_CHAT_URL (Gemini)."
+    ? "Mock chat — set VITE_EXPLAIN_URL (Gemini) or VITE_CHAT_URL (Gemini)."
     : "Mock chat for tool FAQ — set VITE_CHAT_URL for Gemini answers.";
 }
 

@@ -1,5 +1,5 @@
-// Full-pipeline smoke test — hits the real Qwen API.
-// Usage: QWEN_API_KEY=sk-... node scripts/smoke.js [path-to-ingestion.json]
+// Full-pipeline smoke test — hits the real Gemini API.
+// Usage: GEMINI_API_KEY=sk-... node scripts/smoke.js [path-to-ingestion.json]
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -10,7 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   if (!config.apiKey) {
-    console.error("QWEN_API_KEY is not set. Add it to .env or export it, then rerun.");
+    console.error("GEMINI_API_KEY is not set. Add it to .env or export it, then rerun.");
     process.exit(1);
   }
 

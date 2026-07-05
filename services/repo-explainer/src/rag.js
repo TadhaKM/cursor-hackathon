@@ -1,11 +1,11 @@
-import { chat } from "./qwenClient.js";
+import { chat } from "./geminiClient.js";
 import { normalizeIngestion } from "./ingestion.js";
 
 // Lightweight, dependency-free RAG over the ingested key files.
 //
 // For a one-day hackathon a real vector store is overkill: we chunk the key
 // files, score chunks against the question with a simple TF-IDF-ish keyword
-// overlap, and feed the top matches to Qwen. Swappable for embeddings later.
+// overlap, and feed the top matches to Gemini. Swappable for embeddings later.
 
 const CHUNK_LINES = 40;
 const CHUNK_OVERLAP = 8;
