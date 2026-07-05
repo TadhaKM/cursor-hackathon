@@ -4,8 +4,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MOCK_VIDEO = os.getenv("MOCK_VIDEO", "false").lower() == "true"
-
 HEYGEN_API_KEY = os.getenv("HEYGEN_API_KEY", "")
 HEYGEN_AVATAR_ID = os.getenv("HEYGEN_AVATAR_ID", "")
 HEYGEN_VOICE_ID = os.getenv("HEYGEN_VOICE_ID", "")

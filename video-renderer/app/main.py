@@ -19,12 +19,10 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory=str(diagram.STATIC_DIR.parent / "static")), name="static")
 
-MOCK_VIDEO_URL = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
-
 
 @app.get("/")
 async def health():
-    return {"ok": True, "mock_video": config.MOCK_VIDEO}
+    return {"ok": True}
 
 
 @app.post("/render", response_model=JobState)
@@ -68,11 +66,6 @@ async def voices():
         return await heygen.list_voices(client)
 
 
-async def _mock_render_section(title: str) -> dict:
-    await asyncio.sleep(3)
-    return {"title": title, "status": "completed", "video_url": MOCK_VIDEO_URL, "error": None}
-
-
 async def _run_job(job_id: str, req: RenderRequest) -> None:
     try:
         await _run_job_inner(job_id, req)
@@ -93,10 +86,7 @@ async def _run_job_inner(job_id: str, req: RenderRequest) -> None:
     async with httpx.AsyncClient() as client:
         # Submit/poll every section in parallel — don't wait on one before
         # starting the next, since HeyGen renders take 1-3 min each.
-        if config.MOCK_VIDEO:
-            render_tasks = [_mock_render_section(s.title) for s in req.sections]
-        else:
-            render_tasks = [heygen.render_section(s.title, s.script, client) for s in req.sections]
+        render_tasks = [heygen.render_section(s.title, s.script, client) for s in req.sections]
 
         diagram_task = (
             diagram.render_mermaid_to_png(req.mermaid_diagram, client)
