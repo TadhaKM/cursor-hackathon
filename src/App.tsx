@@ -3,6 +3,7 @@ import { marked } from "marked";
 import {
   runPipeline,
   backendMode,
+  chatBackend,
   TOOL_DOCS,
   type StageId,
   type PipelineResult,
@@ -10,6 +11,9 @@ import {
   type IngestResult,
 } from "./api";
 import { ChatPanel } from "./ChatPanel";
+import { DiagramPanel } from "./DiagramPanel";
+import { RepoScorecard, computeScorecard } from "./RepoScorecard.tsx";
+import { resolveDiagramHighlights } from "./diagramHighlights";
 import { useToast } from "./Toast";
 import {
   loadHistory,
@@ -213,6 +217,22 @@ function FeatureShowcase() {
   );
 }
 
+
+function chatHint(hasRepo: boolean): string {
+  const backend = chatBackend();
+  if (backend === "gemini") {
+    return hasRepo
+      ? "Powered by Gemini — grounded in this repo's actual files."
+      : "Powered by Gemini — ask about the pipeline, timing, or limitations.";
+  }
+  if (backend === "qwen" && hasRepo) {
+    return "Powered by Qwen RAG — grounded in this repo's key files.";
+  }
+  return hasRepo
+    ? "Mock chat — set VITE_EXPLAIN_URL (Qwen) or VITE_CHAT_URL (Gemini)."
+    : "Mock chat for tool FAQ — set VITE_CHAT_URL for Gemini answers.";
+}
+
 function AskBuilder({ repoIngestion, repoName }: { repoIngestion?: IngestResult; repoName?: string }) {
   const [open, setOpen] = useState(false);
 
@@ -234,19 +254,7 @@ function AskBuilder({ repoIngestion, repoName }: { repoIngestion?: IngestResult;
               placeholder={
                 repoIngestion ? "Ask about this codebase…" : "Ask how repo → video works…"
               }
-              hint={
-                repoIngestion
-                  ? "Powered by Gemini — grounded in this repo's actual files."
-                  : "Powered by Gemini — ask about the pipeline, timing, or limitations."
-              }
-              examples={
-                repoIngestion
-                  ? [
-                      "Why is auth separate from the API layer?",
-                      "What should I read first in this repo?",
-                    ]
-                  : ["How long does a render take?", "Does it work on private repos?"]
-              }
+              hint={chatHint(!!repoIngestion)}
             />
           </div>
         </div>
@@ -1464,6 +1472,12 @@ function ResultView({
   const video = result.videos[activeSection];
   const section = result.sections[activeSection];
   const [summaryHtml, setSummaryHtml] = useState("");
+  const scorecardBadges = computeScorecard(result.ingestion);
+  const diagramHighlights = resolveDiagramHighlights(
+    result.sections,
+    result.mermaidDiagram ?? null,
+    result.diagramHighlights
+  );
 
   // Subtitles, the animated map, diagram viewing, and fullscreen.
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1566,6 +1580,8 @@ function ResultView({
 
       <div className="result-grid">
         <div className="video-col">
+          <RepoScorecard badges={scorecardBadges} />
+
           <div className="video-wrap" ref={videoWrapRef}>
             {video?.video_url ? (
               <video
@@ -1655,6 +1671,13 @@ function ResultView({
             </div>
           )}
 
+          <DiagramPanel
+            mermaidDiagram={result.mermaidDiagram}
+            diagramImageUrl={result.diagramImageUrl}
+            activeSection={activeSection}
+            highlights={diagramHighlights}
+          />
+
           {section && (
             <div className="transcript-panel">
               <p className="transcript-label">Narration script</p>
@@ -1712,12 +1735,10 @@ function ResultView({
       <div className="chat-row">
         <ChatPanel
           ingestion={result.ingestion}
-          placeholder="Ask a question about this codebase…"
-          hint="Powered by Gemini — grounded in this repo's actual files."
-          examples={[
-            "Why is auth separate from the API layer?",
-            "What happens if the token expires?",
-          ]}
+          placeholder="Ask about this codebase…"
+          backend="explain"
+          examples={["Why is auth separate?", "What should I read first?"]}
+          hint={chatHint(true)}
         />
       </div>
 

@@ -55,12 +55,20 @@ export interface RenderResult {
   diagram_image_url?: string | null;
 }
 
+export interface DiagramHighlight {
+  section_index: number;
+  node_id: string;
+  caption?: string;
+}
+
 export interface PipelineResult {
   repo: string;
   architectureSummary: string;
   sections: ExplainSection[];
   videos: VideoSection[];
   diagramImageUrl: string | null;
+  mermaidDiagram: string | null;
+  diagramHighlights?: DiagramHighlight[];
   ingestion: IngestResult;
 }
 
@@ -89,8 +97,31 @@ export interface ChatAnswer {
   sources: string[];
 }
 
+export interface ChatTurn {
+  question: string;
+  answer: string;
+}
+
+export type ChatBackendPreference = "auto" | "explain" | "gemini";
+
+export class ChatHttpError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ChatHttpError";
+    this.status = status;
+  }
+}
+
 export function chatMode(): "live" | "mock" {
-  return CHAT_URL ? "live" : "mock";
+  return CHAT_URL || EXPLAIN_URL ? "live" : "mock";
+}
+
+export function chatBackend(): "gemini" | "qwen" | "mock" {
+  if (CHAT_URL) return "gemini";
+  if (EXPLAIN_URL) return "qwen";
+  return "mock";
 }
 
 // Synthetic "ingestion" payload for the tool-level FAQ assistant (no repo
@@ -124,23 +155,15 @@ export const TOOL_DOCS: IngestResult = {
   package_manifest: "",
 };
 
-export async function askQuestion(
-  ingestion: IngestResult,
-  question: string,
-  signal?: AbortSignal,
-  contextType: "repo" | "tool" = "repo"
-): Promise<ChatAnswer> {
-  if (!CHAT_URL) {
-    return mockAnswer(ingestion, question);
-  }
+function buildQuestionWithHistory(question: string, history: ChatTurn[]): string {
+  if (history.length === 0) return question;
+  const prior = history
+    .map((t) => `User: ${t.question}\nAssistant: ${t.answer}`)
+    .join("\n\n");
+  return `Prior conversation:\n${prior}\n\nFollow-up question: ${question}`;
+}
 
-  const res = await fetch(CHAT_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ context_type: contextType, question, ingestion }),
-    signal,
-  });
-
+async function parseChatResponse(res: Response): Promise<ChatAnswer> {
   if (!res.ok) {
     const text = await safeText(res);
     let detail = text;
@@ -150,7 +173,7 @@ export async function askQuestion(
     } catch {
       // keep raw text
     }
-    throw new Error(detail || `Chat request failed (${res.status})`);
+    throw new ChatHttpError(detail || `Chat request failed (${res.status})`, res.status);
   }
 
   const data = (await res.json()) as { answer?: string; sources?: string[] };
@@ -160,13 +183,60 @@ export async function askQuestion(
   return { answer: data.answer, sources: data.sources ?? [] };
 }
 
-function mockAnswer(ingestion: IngestResult, question: string): Promise<ChatAnswer> {
-  const subject = ingestion === TOOL_DOCS ? "the tool" : ingestion.repo_url;
+export async function askQuestion(
+  ingestion: IngestResult,
+  question: string,
+  signal?: AbortSignal,
+  contextType: "repo" | "tool" = "repo",
+  options?: { history?: ChatTurn[]; backend?: ChatBackendPreference }
+): Promise<ChatAnswer> {
+  const history = options?.history ?? [];
+  const backend = options?.backend ?? "auto";
+  const enrichedQuestion = buildQuestionWithHistory(question, history);
+
+  // Result-screen repo chat prefers Person 2's /chat when EXPLAIN_URL is set.
+  if (backend === "explain" && EXPLAIN_URL && contextType === "repo") {
+    const res = await fetch(`${EXPLAIN_URL}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...ingestion, question: enrichedQuestion }),
+      signal,
+    });
+    return parseChatResponse(res);
+  }
+
+  if (backend !== "explain" && CHAT_URL) {
+    const res = await fetch(CHAT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        context_type: contextType,
+        question: enrichedQuestion,
+        ingestion,
+      }),
+      signal,
+    });
+    return parseChatResponse(res);
+  }
+
+  // Person 2's RAG chat — same ingestion payload, Qwen + TF-IDF over key files
+  if (EXPLAIN_URL && contextType === "repo") {
+    const res = await fetch(`${EXPLAIN_URL}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...ingestion, question: enrichedQuestion }),
+      signal,
+    });
+    return parseChatResponse(res);
+  }
+
+  return mockAnswer(ingestion, question);
+}
+
+function mockAnswer(_ingestion: IngestResult, question: string): Promise<ChatAnswer> {
   return Promise.resolve({
     answer:
-      `Chat is in mock mode because \`VITE_CHAT_URL\` isn't set. ` +
-      `Deploy the Gemini proxy (api/chat.ts) to Vercel, set \`GEMINI_API_KEY\` server-side, ` +
-      `and point \`VITE_CHAT_URL\` at \`/api/chat\` — then I'll answer about ${subject} using Google Gemini.\n\n` +
+      `Chat is in mock mode — set \`VITE_EXPLAIN_URL\` (Person 2's Qwen RAG) or \`VITE_CHAT_URL\` (Gemini proxy).\n\n` +
       `You asked: "${question}"`,
     sources: [],
   });
@@ -223,6 +293,7 @@ export async function runPipeline(
     sections: explainRes.narration_script.sections,
     videos: final.videos,
     diagramImageUrl: final.diagram_image_url ?? null,
+    mermaidDiagram: explainRes.mermaid_diagram,
     ingestion: ingestRes,
   };
 }
@@ -259,12 +330,28 @@ async function pollRender(
 }
 
 async function postJSON<T>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    const origin = (() => {
+      try {
+        return new URL(url).origin;
+      } catch {
+        return url;
+      }
+    })();
+    throw new Error(
+      `Can't reach ${origin} — the backend isn't running or blocked the request. ` +
+        `For local demo without services, remove VITE_INGEST_URL / VITE_EXPLAIN_URL / VITE_RENDER_URL from .env.local (mock mode).`
+    );
+  }
   if (!res.ok) {
     const text = await safeText(res);
     throw new Error(`${url} -> ${res.status}${text ? `: ${text}` : ""}`);
@@ -273,7 +360,13 @@ async function postJSON<T>(url: string, body: unknown, signal?: AbortSignal): Pr
 }
 
 async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { signal });
+  let res: Response;
+  try {
+    res = await fetch(url, { signal });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    throw new Error(`Can't reach the render service — is it running on ${RENDER_URL}?`);
+  }
   if (!res.ok) {
     const text = await safeText(res);
     throw new Error(`${url} -> ${res.status}${text ? `: ${text}` : ""}`);
@@ -325,6 +418,12 @@ async function runMockPipeline(
   onStage({ stage: "render", ok: true });
 
   const name = repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || "example/demo-repo";
+  const mockMermaid = [
+    "graph TD",
+    "  A[Overview] --> B[Auth Module]",
+    "  B --> C[API Layer]",
+    "  C --> D[Database]",
+  ].join("\n");
 
   return {
     repo: name,
@@ -339,13 +438,15 @@ async function runMockPipeline(
       status: "completed" as const,
     })),
     diagramImageUrl: null,
+    mermaidDiagram: mockMermaid,
     ingestion: {
       repo_url: name,
-      file_tree: "src/\n  index.js\n  routes/\n  services/auth.js\npackage.json\nREADME.md",
+      file_tree:
+        "src/\n  index.js\n  routes/\n  services/auth.js\npackage.json\nREADME.md\n.github/workflows/ci.yml\ntests/\n  auth.test.js",
       readme: `# ${name}\n\nMock ingestion data — no real repo was read since the backend isn't configured.`,
       key_files: [],
-      recent_commits: [],
-      package_manifest: "",
+      recent_commits: [{ message: "fix auth middleware", date: new Date().toISOString() }],
+      package_manifest: '{"dependencies":{"express":"^4.18.0","react":"^19.0.0"}}',
     },
   };
 }

@@ -25,10 +25,30 @@ the app automatically falls back to mock data — so it's fully clickable and
 testable right now, before any backend exists. A pill in the top bar shows
 `○ mock data` vs `● live backend` so it's always obvious which mode you're in.
 
-### Connecting to real backends
+### Connecting to real backends (local full stack)
 
-Copy `.env.example` to `.env.local` and fill in the three pipeline URLs once your
-teammates have something deployed:
+Copy `.env.example` to `.env.local` and set the three pipeline URLs. With all
+three set, the top bar shows `● live backend`. Restart Vite after changing env
+vars (`npm run dev`).
+
+```
+VITE_INGEST_URL=http://localhost:3000
+VITE_EXPLAIN_URL=http://localhost:8787
+VITE_RENDER_URL=http://localhost:8000
+```
+
+**Four terminals + frontend** (from the `repo-to-video/` root unless noted):
+
+| Terminal | Service | Command |
+|----------|---------|---------|
+| 1 | Person 1 — ingest | `cd repo-ingest && npm install && npm run dev` |
+| 2 | Person 2 — explain + chat | `cd services/repo-explainer && npm install && npm run dev` (needs `QWEN_API_KEY` in `.env`) |
+| 3 | Person 3 — render | `cd video-renderer && uvicorn app.main:app --reload --port 8000` (`.env` with HeyGen keys or `MOCK_VIDEO=true`) |
+| 4 | Person 4 — frontend | `npm install && npm run dev` |
+
+Health checks (optional): `curl http://localhost:3000/health`, `curl http://localhost:8787/health`, `curl http://localhost:8000/health`.
+
+For production, swap localhost URLs for deployed Render service URLs:
 
 ```
 VITE_INGEST_URL=https://repo-ingest.onrender.com
@@ -36,9 +56,8 @@ VITE_EXPLAIN_URL=https://repo-explainer.onrender.com
 VITE_RENDER_URL=https://video-renderer.onrender.com
 ```
 
-No code changes needed — just set the env vars (locally in `.env.local`,
-or in Render's dashboard when deployed) and the app switches from mock to
-live automatically.
+No code changes needed — the app switches from mock to live automatically when
+all three pipeline URLs are set.
 
 ## What's implemented
 
@@ -53,19 +72,29 @@ live automatically.
   globally, or repo questions after a walkthrough is ready.
 - **Error** — shows which stage failed and the raw error message, with retry.
 
-## Chat (Google Gemini)
+## Chat (Gemini proxy or Person 2 Qwen RAG)
 
 Chat is **separate from the explain pipeline**. Person 2's `/explain` endpoint
-still uses Qwen via `VITE_EXPLAIN_URL`. Chat instead calls a Vercel serverless
-proxy (`api/chat.ts`) so `GEMINI_API_KEY` never ships to the browser.
+still uses Qwen via `VITE_EXPLAIN_URL`. Chat picks a backend automatically:
 
-### 1. Get a Gemini API key
+| Config | Repo chat (results page) | Tool chat (floating `?`) | ChatPanel pill |
+|--------|--------------------------|--------------------------|----------------|
+| `VITE_CHAT_URL` set | Gemini proxy (`api/chat.ts`) | Gemini + `TOOL_DOCS` | `● Gemini` |
+| Only `VITE_EXPLAIN_URL` set | Person 2 `POST /chat` (Qwen RAG) | Mock (built-in FAQ text) | `● Qwen (Person 2 RAG)` |
+| Neither set | Mock | Mock | `○ mock chat` |
+
+Pipeline mock/live (`● live backend` / `○ mock data`) is independent of chat mode.
+
+### Optional: Gemini proxy (Vercel)
+
+For tool FAQ and repo chat via Gemini, deploy the serverless proxy so
+`GEMINI_API_KEY` never ships to the browser.
 
 Create a key at [Google AI Studio](https://aistudio.google.com/apikey).
 **Never commit the key** — add it only to `.env.local` (local) or the Vercel
-dashboard (production). Rotate the key if it was ever exposed in chat or logs.
+dashboard (production).
 
-### 2. Deploy the proxy to Vercel
+### Deploy the proxy to Vercel
 
 From this folder:
 
@@ -86,36 +115,34 @@ Server env vars (Vercel dashboard or `.env.local` for `vercel dev`):
 | `GEMINI_MODEL` | no | Default `gemini-2.0-flash` |
 | `ALLOWED_ORIGIN` | no | CORS allowlist for your frontend origin |
 
-### 3. Point the frontend at the proxy
+### Point the frontend at the proxy
 
 Set `VITE_CHAT_URL` in `.env.local` or Render:
 
 ```
-# Local (run `npm run dev:api` in a second terminal)
-VITE_CHAT_URL=http://localhost:3000/api/chat
+# Local — use port 3001 so ingest (3000) doesn't clash
+VITE_CHAT_URL=http://localhost:3001/api/chat
 
 # Production
 VITE_CHAT_URL=https://<your-vercel-project>.vercel.app/api/chat
 ```
 
-Local dev with the proxy:
+Local dev with the proxy (optional 5th terminal):
 
 ```
-# Terminal 1 — Gemini proxy (reads GEMINI_API_KEY from .env.local)
+# Terminal — Gemini proxy (reads GEMINI_API_KEY from .env.local)
 npm run dev:api
 
-# Terminal 2 — Vite frontend
+# Frontend (restart after env change)
 npm run dev
 ```
 
-Both chat UIs (results-page chat and floating `?` assistant) POST to
-`VITE_CHAT_URL` with `{ context_type, question, ingestion }`:
+Both chat UIs POST to `VITE_CHAT_URL` with `{ context_type, question, ingestion }`:
 
 - **repo** — grounded in the ingested README, file tree, and top key files
-- **tool** — uses built-in tool docs for FAQ-style questions
+- **tool** — uses built-in `TOOL_DOCS` for FAQ-style questions
 
-If `VITE_CHAT_URL` isn't set, chat runs in **mock mode** — same pill pattern
-(`● Gemini` vs `○ mock chat`), independent of pipeline mock/live mode.
+If neither `VITE_CHAT_URL` nor `VITE_EXPLAIN_URL` is set, chat runs in **mock mode**.
 
 ## Also new: transcript, shortcuts, history, and export
 
@@ -134,14 +161,24 @@ If `VITE_CHAT_URL` isn't set, chat runs in **mock mode** — same pill pattern
   a `.md` file, or copy just the summary, both with toast confirmations
   (`src/Toast.tsx`) instead of ad hoc button-text swaps.
 
-## Deploy on Render
+## Deploy on Render (Person 4 checklist)
 
-1. New "Static Site" on Render, point at this repo/folder.
-2. Build command: `npm install && npm run build`
-3. Publish directory: `dist`
-4. Set the three `VITE_*_URL` env vars in the Render dashboard once the
-   backend services are deployed. Set `VITE_CHAT_URL` to your Vercel proxy URL.
-   Leave pipeline URLs unset to keep running in mock mode.
+1. New **Static Site** on Render, point at this repo/folder.
+2. **Build command:** `npm install && npm run build`
+3. **Publish directory:** `dist`
+4. **Environment variables** (Render dashboard → Environment):
+
+| Variable | Required | Example |
+|----------|----------|---------|
+| `VITE_INGEST_URL` | yes (live pipeline) | `https://your-repo-ingest.onrender.com` |
+| `VITE_EXPLAIN_URL` | yes (live pipeline) | `https://your-repo-explainer.onrender.com` |
+| `VITE_RENDER_URL` | yes (live pipeline) | `https://your-video-renderer.onrender.com` |
+| `VITE_CHAT_URL` | optional | `https://your-project.vercel.app/api/chat` |
+
+5. Leave all three pipeline URLs **unset** to keep mock mode for demos.
+6. Redeploy after changing env vars (Vite bakes them in at build time).
+7. If using Gemini chat, set `GEMINI_API_KEY` on **Vercel** (not Render) and
+   add `ALLOWED_ORIGIN` to your Render static site URL for CORS.
 
 Each backend folder (`repo-ingest/`, `services/repo-explainer/`,
 `video-renderer/`) deploys as its own Render service — currently only
