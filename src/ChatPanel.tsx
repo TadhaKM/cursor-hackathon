@@ -122,6 +122,12 @@ export function ChatPanel({
           placeholder={placeholder}
           disabled={loading}
           aria-label="Chat message"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              submit(input);
+            }
+          }}
         />
         <button type="submit" className="chat-send" disabled={loading || !input.trim()}>
           Send

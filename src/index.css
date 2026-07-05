@@ -3,8 +3,8 @@
   --panel: #fffdf8;
   --ink: #14171f;
   --border: #14171f;
-  --text-dim: #43454e;
-  --text-faint: #6b6d76;
+  --text-dim: #3a3d47;
+  --text-faint: #5c5f6a;
   --add: #2f8f4e;
   --add-tint: #d9efdd;
   --del: #c1443a;
@@ -15,6 +15,38 @@
   --display: "Space Grotesk", ui-sans-serif, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
   --sans: "Inter", -apple-system, sans-serif;
+
+  /* Typography scale */
+  --text-body: 17px;
+  --text-body-sm: 15px;
+  --text-body-xs: 13.5px;
+  --text-body-lg: 19px;
+  --text-display-xl: 52px;
+  --text-display-lg: 36px;
+  --text-display-md: 24px;
+  --text-display-sm: 20px;
+  --text-mono: 15px;
+  --text-mono-sm: 14px;
+  --text-mono-xs: 13px;
+  --line-body: 1.62;
+  --line-relaxed: 1.75;
+  --line-tight: 1.12;
+}
+
+[data-theme="dark"] {
+  --bg: #0f1117;
+  --panel: #1a1d27;
+  --ink: #eef0f6;
+  --border: #eef0f6;
+  --text-dim: #b4b8c5;
+  --text-faint: #8a8f9e;
+  --add: #4caf72;
+  --add-tint: #1a2e22;
+  --del: #e86b62;
+  --del-tint: #2e1a18;
+  --pop: #ff7a52;
+  --pop-tint: #2e1810;
+  --info: #6b8cff;
 }
 
 * {
@@ -34,7 +66,13 @@ body {
   background-position: -10px -10px;
   color: var(--ink);
   font-family: var(--sans);
+  font-size: var(--text-body);
+  line-height: var(--line-body);
   -webkit-font-smoothing: antialiased;
+}
+
+[data-theme="dark"] body {
+  background-image: radial-gradient(rgba(238, 240, 246, 0.06) 1.5px, transparent 1.5px);
 }
 
 #root {
@@ -46,7 +84,8 @@ button {
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+a:focus-visible {
   outline: 3px solid var(--info);
   outline-offset: 2px;
 }

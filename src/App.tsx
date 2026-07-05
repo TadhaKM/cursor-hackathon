@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { marked } from "marked";
 import {
   runPipeline,
@@ -10,10 +10,123 @@ import {
   type IngestResult,
 } from "./api";
 import { ChatPanel } from "./ChatPanel";
+import { useToast } from "./Toast";
+import {
+  loadHistory,
+  saveWalkthrough,
+  findById,
+  shareUrl,
+  downloadMarkdown,
+  formatRelativeTime,
+  type WalkthroughEntry,
+} from "./history";
 import "./App.css";
 
 type ViewState = "input" | "progress" | "result" | "error";
 type Page = "app" | "about" | "faq" | "changelog";
+
+const PIPELINE_STEPS = ["Ingest repo", "Explain architecture", "Render videos"];
+
+const SHORTCUTS = [
+  { keys: ["←", "→"], label: "Previous / next section (results)" },
+  { keys: ["[", "]"], label: "Previous / next section (results)" },
+  { keys: ["Enter"], label: "Submit repo URL (input screen)" },
+  { keys: ["Ctrl", "Enter"], label: "Send chat message" },
+  { keys: ["?"], label: "Show keyboard shortcuts" },
+  { keys: ["Esc"], label: "Close dialog" },
+];
+
+function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null;
+
+  return (
+    <div
+      className="modal-backdrop"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="modal-panel"
+        role="dialog"
+        aria-labelledby="shortcuts-title"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h2 className="modal-title" id="shortcuts-title">
+            Keyboard shortcuts
+          </h2>
+          <button className="modal-close" onClick={onClose} aria-label="Close shortcuts">
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          <ul className="shortcut-list">
+            {SHORTCUTS.map((s) => (
+              <li className="shortcut-item" key={s.label}>
+                <span>{s.label}</span>
+                <span className="shortcut-keys">
+                  {s.keys.map((k) => (
+                    <kbd className="kbd" key={k}>
+                      {k}
+                    </kbd>
+                  ))}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PipelineStrip() {
+  return (
+    <div className="pipeline-strip" aria-label="Pipeline stages">
+      {PIPELINE_STEPS.map((step, i) => (
+        <span className={`pipeline-step ${i === 0 ? "pipeline-step-pop" : ""}`} key={step}>
+          {i + 1}. {step}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function WalkthroughHistory({
+  entries,
+  onOpen,
+}: {
+  entries: WalkthroughEntry[];
+  onOpen: (entry: WalkthroughEntry) => void;
+}) {
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="history-section">
+      <h3>Saved walkthroughs</h3>
+      <div className="history-list">
+        {entries.map((entry) => (
+          <button
+            key={entry.id}
+            className="history-card"
+            onClick={() => onOpen(entry)}
+            aria-label={`Reopen walkthrough for ${entry.result.repo}`}
+          >
+            <span className="history-card-main">
+              <span className="history-repo">{entry.result.repo}</span>
+              <span className="history-meta">
+                {entry.result.sections.length} sections · {formatRelativeTime(entry.savedAt)} ·{" "}
+                {entry.persona === "new_grad" ? "new grad" : "senior engineer"}
+              </span>
+            </span>
+            <span className="history-open">Open →</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const DEMO_REPOS = [
   "github.com/expressjs/express",
@@ -338,6 +451,19 @@ function FaqPage() {
 
 const CHANGELOG_ENTRIES = [
   {
+    version: "v0.6.0",
+    date: "Jul 5, 2026",
+    hash: "e8c2f4",
+    changes: [
+      "Typography pass: larger body text, mono sizes, and line-height across the app",
+      "Section transcript panel beside the video on the results screen",
+      "Keyboard shortcuts for section navigation, chat, and a ? help modal",
+      "Walkthrough history saved to localStorage — reopen past results instantly",
+      "Export architecture as .md, copy summary or share link with toast confirmations",
+      "Loading skeletons, dark theme tokens, and accessibility polish",
+    ],
+  },
+  {
     version: "v0.5.0",
     date: "Jul 5, 2026",
     hash: "f4a9e1",
@@ -436,6 +562,7 @@ function saveRecent(repo: string) {
 }
 
 function App() {
+  const { toast } = useToast();
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "light";
     const saved = window.localStorage.getItem("theme");
@@ -461,11 +588,65 @@ function App() {
   const [activeSection, setActiveSection] = useState(0);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [recents, setRecents] = useState<string[]>([]);
+  const [history, setHistory] = useState<WalkthroughEntry[]>([]);
+  const [walkthroughId, setWalkthroughId] = useState<string | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setRecents(loadRecents());
+    setHistory(loadHistory());
   }, []);
+
+  const openWalkthrough = useCallback((entry: WalkthroughEntry) => {
+    setPage("app");
+    setResult(entry.result);
+    setActiveSection(0);
+    setSummaryOpen(false);
+    setWalkthroughId(entry.id);
+    setPersona(entry.persona);
+    setRepoUrl(entry.repoUrl);
+    setView("result");
+    window.history.replaceState(null, "", `#walk/${entry.id}`);
+  }, []);
+
+  useEffect(() => {
+    const hash = window.location.hash;
+    const match = hash.match(/^#walk\/([a-f0-9-]+)$/i);
+    if (!match) return;
+    const entry = findById(match[1]);
+    if (!entry) return;
+    openWalkthrough(entry);
+  }, [openWalkthrough]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA";
+
+      if (e.key === "?" && !typing) {
+        e.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (e.key === "Escape") {
+        setShortcutsOpen(false);
+        return;
+      }
+
+      if (page !== "app" || view !== "result" || !result || typing) return;
+
+      if (e.key === "ArrowLeft" || e.key === "[") {
+        e.preventDefault();
+        setActiveSection((i) => Math.max(0, i - 1));
+      } else if (e.key === "ArrowRight" || e.key === "]") {
+        e.preventDefault();
+        setActiveSection((i) => Math.min(result.sections.length - 1, i + 1));
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [page, view, result]);
 
   function runDemo() {
     const repo = DEMO_REPOS[Math.floor(Math.random() * DEMO_REPOS.length)];
@@ -509,6 +690,11 @@ function App() {
       setView("result");
       saveRecent(trimmed);
       setRecents(loadRecents());
+      const entry = saveWalkthrough(trimmed, persona, res);
+      setWalkthroughId(entry.id);
+      setHistory(loadHistory());
+      window.history.replaceState(null, "", `#walk/${entry.id}`);
+      toast("Walkthrough ready — saved to your history", "success");
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
       setView("error");
@@ -546,6 +732,14 @@ function App() {
             ▶ Try a demo
           </button>
           <button
+            className="shortcuts-hint-btn"
+            onClick={() => setShortcutsOpen(true)}
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+          >
+            ?
+          </button>
+          <button
             className="theme-toggle"
             onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
             aria-label="Toggle dark mode"
@@ -575,6 +769,8 @@ function App() {
                 onPersonaChange={setPersona}
                 onSubmit={() => start()}
                 recents={recents}
+                history={history}
+                onOpenHistory={openWalkthrough}
               />
               <FeatureShowcase />
             </>
@@ -591,7 +787,11 @@ function App() {
               onSelectSection={setActiveSection}
               summaryOpen={summaryOpen}
               onToggleSummary={() => setSummaryOpen((v) => !v)}
-              onReset={() => setView("input")}
+              onReset={() => {
+                setView("input");
+                window.history.replaceState(null, "", window.location.pathname);
+              }}
+              walkthroughId={walkthroughId}
             />
           )}
 
@@ -607,6 +807,7 @@ function App() {
       </main>
 
       <AskBuilder repoIngestion={result?.ingestion} repoName={result?.repo} />
+      <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   );
 }
@@ -660,6 +861,8 @@ function InputView({
   onPersonaChange,
   onSubmit,
   recents,
+  history,
+  onOpenHistory,
 }: {
   repoUrl: string;
   onChange: (v: string) => void;
@@ -668,6 +871,8 @@ function InputView({
   onPersonaChange: (p: Persona) => void;
   onSubmit: () => void;
   recents: string[];
+  history: WalkthroughEntry[];
+  onOpenHistory: (entry: WalkthroughEntry) => void;
 }) {
   const examples = [
     "github.com/expressjs/express",
@@ -686,6 +891,8 @@ function InputView({
           archaeology.
         </p>
 
+        <PipelineStrip />
+
         <div className={`input-row ${error ? "input-row-error" : ""}`}>
           <span className="input-prefix">url&nbsp;&gt;</span>
           <input
@@ -693,6 +900,7 @@ function InputView({
             value={repoUrl}
             onChange={(e) => onChange(e.target.value)}
             placeholder="github.com/owner/repo"
+            aria-label="GitHub repository URL"
             aria-invalid={!!error}
             onKeyDown={(e) => {
               if (e.key === "Enter") onSubmit();
@@ -744,6 +952,8 @@ function InputView({
             Generate walkthrough
           </button>
         </div>
+
+        <WalkthroughHistory entries={history} onOpen={onOpenHistory} />
       </div>
 
       <div className="input-visual">
@@ -762,10 +972,26 @@ function ProgressView({
   activeStage: StageId | null;
   failedStage: StageId | null;
 }) {
+  const anyStarted = completed.size > 0 || activeStage !== null;
+
   return (
     <div className="panel">
       <p className="eyebrow">// this part writes itself</p>
       <h2 className="progress-title">Committing each stage as it lands.</h2>
+
+      {!anyStarted && (
+        <div className="graph-skeleton" aria-hidden="true">
+          {[0, 1, 2].map((i) => (
+            <div className="skeleton-row" key={i}>
+              <div className="skeleton-circle" />
+              <div className="skeleton-lines">
+                <div className="skeleton-line skeleton-line-short" />
+                <div className="skeleton-line skeleton-line-long" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="graph">
         {STAGES.map((s, i) => {
@@ -809,6 +1035,7 @@ function ResultView({
   summaryOpen,
   onToggleSummary,
   onReset,
+  walkthroughId,
 }: {
   result: PipelineResult;
   activeSection: number;
@@ -816,19 +1043,38 @@ function ResultView({
   summaryOpen: boolean;
   onToggleSummary: () => void;
   onReset: () => void;
+  walkthroughId: string | null;
 }) {
+  const { toast } = useToast();
   const video = result.videos[activeSection];
+  const section = result.sections[activeSection];
   const [summaryHtml, setSummaryHtml] = useState("");
-  const [copied, setCopied] = useState(false);
 
   async function copySummary() {
     try {
       await navigator.clipboard.writeText(result.architectureSummary);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      toast("Architecture summary copied", "success");
     } catch {
-      // Clipboard API unavailable — nothing to do, button just won't confirm
+      toast("Couldn't copy — clipboard blocked", "error");
     }
+  }
+
+  async function copyShareLink() {
+    if (!walkthroughId) {
+      toast("Run a new walkthrough to get a shareable link", "info");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(shareUrl(walkthroughId));
+      toast("Share link copied — reopen anytime from history", "success");
+    } catch {
+      toast("Couldn't copy link", "error");
+    }
+  }
+
+  function exportMarkdown() {
+    downloadMarkdown(result);
+    toast("Downloaded architecture.md", "success");
   }
 
   useEffect(() => {
@@ -844,15 +1090,49 @@ function ResultView({
   return (
     <div className="panel result-panel">
       <p className="eyebrow">// done · {result.repo}</p>
-      <h2>Ready to share. No slide deck required.</h2>
+      <div className="result-header-row">
+        <h2>Ready to share. No slide deck required.</h2>
+        <div className="export-row">
+          <button className="export-btn" onClick={exportMarkdown} type="button">
+            ↓ Export .md
+          </button>
+          <button className="export-btn" onClick={copyShareLink} type="button">
+            ⧉ Copy link
+          </button>
+          <button className="export-btn" onClick={copySummary} type="button">
+            ⧉ Copy summary
+          </button>
+        </div>
+      </div>
 
       <div className="result-grid">
         <div className="video-col">
           {video?.video_url ? (
-            <video key={video.video_url} className="video" src={video.video_url} controls playsInline />
+            <video
+              key={video.video_url}
+              className="video"
+              src={video.video_url}
+              controls
+              playsInline
+              aria-label={`Video walkthrough: ${section?.title ?? "section"}`}
+            />
           ) : (
-            <div className="video video-placeholder">Section still rendering…</div>
+            <div className="video video-placeholder" role="status">
+              Section still rendering…
+            </div>
           )}
+
+          {section && (
+            <div className="transcript-panel">
+              <p className="transcript-label">Narration script</p>
+              <h4 className="transcript-title">{section.title}</h4>
+              <p className="transcript-body">{section.script}</p>
+              <p className="section-nav-hint">
+                Use ← → or [ ] to switch sections · Press ? for all shortcuts
+              </p>
+            </div>
+          )}
+
           {result.diagramImageUrl && (
             <img className="diagram-image" src={result.diagramImageUrl} alt="Architecture diagram" />
           )}
@@ -866,6 +1146,8 @@ function ResultView({
                 <button
                   className={`section-btn ${i === activeSection ? "section-btn-active" : ""}`}
                   onClick={() => onSelectSection(i)}
+                  type="button"
+                  aria-current={i === activeSection ? "true" : undefined}
                 >
                   {s.title}
                   {result.videos[i]?.status === "processing" && (
@@ -877,11 +1159,11 @@ function ResultView({
           </ul>
 
           <div className="summary-row">
-            <button className="summary-toggle" onClick={onToggleSummary}>
+            <button className="summary-toggle" onClick={onToggleSummary} type="button">
               {summaryOpen ? "▾" : "▸"} Read the full summary
             </button>
-            <button className="copy-btn" onClick={copySummary}>
-              {copied ? "✓ Copied" : "Copy summary"}
+            <button className="copy-btn" onClick={copySummary} type="button">
+              Copy summary
             </button>
           </div>
           {summaryOpen && (
