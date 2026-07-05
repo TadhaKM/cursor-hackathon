@@ -1377,6 +1377,72 @@ function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
   );
 }
 
+// Turn a section title like "Routing Layer (src/routes/auth.js, ...)" into a
+// compact { label, file } for the animated walkthrough map / step chip.
+function shortSection(title: string): { label: string; file: string } {
+  const fileMatch = title.match(/\(([^)]+)\)/);
+  const file = fileMatch ? fileMatch[1].split(",")[0].trim() : "";
+  let label = title
+    .replace(/\s*\([^)]*\)/g, "")
+    .replace(/\s*&\s.*$/, "")
+    .trim();
+  if (label.length > 28) label = label.slice(0, 26).trim() + "…";
+  return { label: label || title, file };
+}
+
+// Animated vertical map of the walkthrough. Fills completed steps, highlights
+// the one that's playing (with an in-section progress bar driven by the
+// video), and is clickable to jump around.
+function WalkthroughMap({
+  sections,
+  videos,
+  activeSection,
+  progress,
+  onSelect,
+}: {
+  sections: { title: string; script: string }[];
+  videos: { status: string }[];
+  activeSection: number;
+  progress: number;
+  onSelect: (i: number) => void;
+}) {
+  return (
+    <ol className="wmap-list">
+      {sections.map((s, i) => {
+        const { label, file } = shortSection(s.title);
+        const state =
+          i < activeSection ? "done" : i === activeSection ? "active" : "todo";
+        const rendering = videos[i]?.status === "processing";
+        return (
+          <li key={s.title} className={`wmap-node wmap-${state}`}>
+            <button
+              className="wmap-btn"
+              onClick={() => onSelect(i)}
+              type="button"
+              aria-current={state === "active" ? "step" : undefined}
+            >
+              <span className="wmap-dot">{state === "done" ? "✓" : i + 1}</span>
+              <span className="wmap-text">
+                <span className="wmap-label">{label}</span>
+                {file && <span className="wmap-file">{file}</span>}
+              </span>
+              {rendering && <span className="wmap-badge">rendering</span>}
+            </button>
+            {state === "active" && (
+              <div className="wmap-progress" aria-hidden="true">
+                <div
+                  className="wmap-progress-bar"
+                  style={{ width: `${Math.round(progress * 100)}%` }}
+                />
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function ResultView({
   result,
   activeSection,
@@ -1399,28 +1465,48 @@ function ResultView({
   const section = result.sections[activeSection];
   const [summaryHtml, setSummaryHtml] = useState("");
 
-  // Subtitles + diagram viewing.
+  // Subtitles, the animated map, diagram viewing, and fullscreen.
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoWrapRef = useRef<HTMLDivElement>(null);
   const [captionsOn, setCaptionsOn] = useState(true);
   const [captionIdx, setCaptionIdx] = useState(0);
+  const [videoProgress, setVideoProgress] = useState(0);
   const [pipDiagram, setPipDiagram] = useState(false);
   const [diagramOpen, setDiagramOpen] = useState(false);
   const sentences = section ? splitSentences(section.script) : [];
 
-  // Reset the caption when the section (and its video) changes.
+  // Reset caption + progress when the section (and its video) changes.
   useEffect(() => {
     setCaptionIdx(0);
+    setVideoProgress(0);
   }, [activeSection]);
 
-  function syncCaption() {
+  // Drives both the subtitles and the walkthrough map's in-section progress.
+  function syncPlayback() {
     const v = videoRef.current;
-    if (!v || !v.duration || sentences.length === 0) return;
-    const frac = v.currentTime / v.duration;
-    const idx = Math.min(
-      sentences.length - 1,
-      Math.max(0, Math.floor(frac * sentences.length))
-    );
-    setCaptionIdx(idx);
+    if (!v || !v.duration) return;
+    const frac = Math.min(1, Math.max(0, v.currentTime / v.duration));
+    setVideoProgress(frac);
+    if (sentences.length > 0) {
+      setCaptionIdx(
+        Math.min(
+          sentences.length - 1,
+          Math.max(0, Math.floor(frac * sentences.length))
+        )
+      );
+    }
+  }
+
+  // Fullscreen the video *container* (not the raw <video>) so captions, the
+  // diagram overlay, and the step chip stay visible in fullscreen.
+  function toggleFullscreen() {
+    const el = videoWrapRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      el.requestFullscreen?.();
+    }
   }
 
   async function copySummary() {
@@ -1480,7 +1566,7 @@ function ResultView({
 
       <div className="result-grid">
         <div className="video-col">
-          <div className="video-wrap">
+          <div className="video-wrap" ref={videoWrapRef}>
             {video?.video_url ? (
               <video
                 ref={videoRef}
@@ -1489,13 +1575,25 @@ function ResultView({
                 src={video.video_url}
                 controls
                 playsInline
-                onTimeUpdate={syncCaption}
-                onLoadedMetadata={syncCaption}
+                onTimeUpdate={syncPlayback}
+                onLoadedMetadata={syncPlayback}
                 aria-label={`Video walkthrough: ${section?.title ?? "section"}`}
               />
             ) : (
               <div className="video video-placeholder" role="status">
                 Section still rendering…
+              </div>
+            )}
+
+            {/* Current-step context — stays visible in fullscreen. */}
+            {video?.video_url && section && (
+              <div className="step-chip">
+                <span className="step-chip-num">
+                  {activeSection + 1}/{result.sections.length}
+                </span>
+                <span className="step-chip-label">
+                  {shortSection(section.title).label}
+                </span>
               </div>
             )}
 
@@ -1546,6 +1644,14 @@ function ResultView({
                   </button>
                 </>
               )}
+              <button
+                className="vtool"
+                onClick={toggleFullscreen}
+                type="button"
+                title="Fullscreen (keeps subtitles + diagram overlay visible)"
+              >
+                ⛶ Fullscreen
+              </button>
             </div>
           )}
 
@@ -1576,24 +1682,15 @@ function ResultView({
         </div>
 
         <div className="sections-col">
-          <h3>Sections</h3>
-          <ul className="section-list">
-            {result.sections.map((s, i) => (
-              <li key={s.title}>
-                <button
-                  className={`section-btn ${i === activeSection ? "section-btn-active" : ""}`}
-                  onClick={() => onSelectSection(i)}
-                  type="button"
-                  aria-current={i === activeSection ? "true" : undefined}
-                >
-                  {s.title}
-                  {result.videos[i]?.status === "processing" && (
-                    <span className="section-status"> · rendering</span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <h3>Walkthrough map</h3>
+          <p className="wmap-hint">Follows the narration — click any step to jump.</p>
+          <WalkthroughMap
+            sections={result.sections}
+            videos={result.videos}
+            activeSection={activeSection}
+            progress={videoProgress}
+            onSelect={onSelectSection}
+          />
 
           <div className="summary-row">
             <button className="summary-toggle" onClick={onToggleSummary} type="button">

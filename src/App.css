@@ -2515,3 +2515,255 @@ h3 {
   }
 }
 
+/* ============================================================
+   Walkthrough map (animated section flow) + step chip
+   ============================================================ */
+
+.wmap-hint {
+  font-family: var(--mono);
+  font-size: var(--text-mono-xs);
+  color: var(--text-faint);
+  margin: 0 0 14px;
+}
+.wmap-list {
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+}
+.wmap-node {
+  position: relative;
+  padding-left: 4px;
+}
+/* connector line between steps */
+.wmap-node:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 23px;
+  top: 36px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--border);
+  opacity: 0.22;
+}
+.wmap-done:not(:last-child)::before,
+.wmap-active:not(:last-child)::before {
+  opacity: 1;
+}
+.wmap-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease,
+    transform 0.12s ease, box-shadow 0.12s ease;
+}
+.wmap-btn:hover {
+  background: color-mix(in srgb, var(--pop) 8%, transparent);
+}
+.wmap-dot {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: var(--text-mono-xs);
+  font-weight: 700;
+  color: var(--text-dim);
+  z-index: 1;
+}
+.wmap-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.wmap-label {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: var(--text-body-sm);
+  color: var(--ink);
+  line-height: 1.15;
+}
+.wmap-file {
+  font-family: var(--mono);
+  font-size: var(--text-mono-xs);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wmap-badge {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--pop);
+  animation: wmap-pulse 1.2s ease-in-out infinite;
+}
+.wmap-done .wmap-dot {
+  background: var(--add);
+  border-color: var(--add);
+  color: #fff;
+}
+.wmap-done .wmap-label {
+  color: var(--text-dim);
+}
+.wmap-active .wmap-btn {
+  background: var(--panel);
+  border-color: var(--pop);
+  box-shadow: 3px 3px 0 var(--pop);
+  transform: translateX(2px);
+}
+.wmap-active .wmap-dot {
+  background: var(--pop);
+  border-color: var(--pop);
+  color: #fff;
+  animation: wmap-glow 1.6s ease-in-out infinite;
+}
+.wmap-todo .wmap-btn {
+  opacity: 0.55;
+}
+.wmap-todo .wmap-btn:hover {
+  opacity: 1;
+}
+.wmap-progress {
+  height: 4px;
+  margin: 2px 0 4px 46px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pop) 18%, transparent);
+  overflow: hidden;
+}
+.wmap-progress-bar {
+  height: 100%;
+  background: var(--pop);
+  border-radius: 999px;
+  transition: width 0.25s linear;
+}
+@keyframes wmap-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--pop) 22%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--pop) 9%, transparent);
+  }
+}
+@keyframes wmap-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* Current-step chip on the video (stays visible in fullscreen). */
+.step-chip {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(10, 12, 18, 0.82);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: var(--text-mono-xs);
+  pointer-events: none;
+  z-index: 3;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.step-chip-num {
+  font-weight: 700;
+  color: var(--pop);
+}
+.step-chip-label {
+  font-weight: 600;
+}
+
+/* ============================================================
+   Fullscreen — keep captions, diagram overlay & step chip visible.
+   We fullscreen the wrapper, not the raw <video>, so overlays stay.
+   (:fullscreen and :-webkit-full-screen kept as separate rules so an
+   unknown selector can't invalidate the whole group.)
+   ============================================================ */
+.video-wrap:fullscreen {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.video-wrap:fullscreen .video {
+  width: 100%;
+  height: 100%;
+  max-height: 100vh;
+  object-fit: contain;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+.video-wrap:fullscreen .caption-overlay {
+  bottom: 9vh;
+  max-width: 82%;
+  font-size: clamp(18px, 2.4vw, 30px);
+}
+.video-wrap:fullscreen .video-pip {
+  top: 4vh;
+  right: 4vh;
+  width: 24%;
+  max-width: 340px;
+}
+.video-wrap:fullscreen .step-chip {
+  top: 4vh;
+  left: 4vh;
+  font-size: clamp(13px, 1.4vw, 18px);
+}
+
+.video-wrap:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.video-wrap:-webkit-full-screen .video {
+  width: 100%;
+  height: 100%;
+  max-height: 100vh;
+  object-fit: contain;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+.video-wrap:-webkit-full-screen .caption-overlay {
+  bottom: 9vh;
+  max-width: 82%;
+  font-size: clamp(18px, 2.4vw, 30px);
+}
+.video-wrap:-webkit-full-screen .video-pip {
+  top: 4vh;
+  right: 4vh;
+  width: 24%;
+  max-width: 340px;
+}
+.video-wrap:-webkit-full-screen .step-chip {
+  top: 4vh;
+  left: 4vh;
+  font-size: clamp(13px, 1.4vw, 18px);
+}
+
