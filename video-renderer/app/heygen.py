@@ -53,6 +53,9 @@ async def submit_video(script: str, client: httpx.AsyncClient) -> str:
             }
         ],
         "dimension": {"width": 1280, "height": 720},
+        # Burn HeyGen's synced captions into the rendered video so the mp4 has
+        # subtitles even outside our player (the frontend also shows its own).
+        "caption": True,
     }
 
     resp = await client.post(

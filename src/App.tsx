@@ -1309,6 +1309,74 @@ function ProgressView({
   );
 }
 
+// Split a narration script into caption-sized sentences. HeyGen doesn't give
+// us word-level timing, so for on-screen subtitles we distribute the sentences
+// evenly across the clip's duration (see syncCaption in ResultView).
+function splitSentences(text: string): string[] {
+  const parts = text.replace(/\s+/g, " ").match(/[^.!?]+[.!?]*/g);
+  const cleaned = (parts ?? [text]).map((s) => s.trim()).filter(Boolean);
+  return cleaned.length ? cleaned : [text];
+}
+
+// Full-screen, click-to-zoom architecture-diagram viewer. Reachable at any
+// point via the floating "Diagram" button, the toolbar, the thumbnail, and the
+// picture-in-picture overlay. Esc or a backdrop click closes it.
+function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
+  const [zoom, setZoom] = useState(false);
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div
+      className="diagram-modal-backdrop"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Architecture diagram"
+    >
+      <div className="diagram-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="diagram-modal-bar">
+          <span className="diagram-modal-title">◇ Architecture diagram</span>
+          <div className="diagram-modal-actions">
+            <button
+              className="diagram-modal-btn"
+              onClick={() => setZoom((z) => !z)}
+              type="button"
+            >
+              {zoom ? "Fit" : "Zoom"}
+            </button>
+            <a
+              className="diagram-modal-btn"
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open ↗
+            </a>
+            <button
+              className="diagram-modal-btn diagram-modal-close"
+              onClick={onClose}
+              type="button"
+              aria-label="Close diagram"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+        <div
+          className={`diagram-modal-body ${zoom ? "diagram-modal-body-zoom" : ""}`}
+        >
+          <img src={url} alt="Architecture diagram" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ResultView({
   result,
   activeSection,
@@ -1330,6 +1398,30 @@ function ResultView({
   const video = result.videos[activeSection];
   const section = result.sections[activeSection];
   const [summaryHtml, setSummaryHtml] = useState("");
+
+  // Subtitles + diagram viewing.
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [captionsOn, setCaptionsOn] = useState(true);
+  const [captionIdx, setCaptionIdx] = useState(0);
+  const [pipDiagram, setPipDiagram] = useState(false);
+  const [diagramOpen, setDiagramOpen] = useState(false);
+  const sentences = section ? splitSentences(section.script) : [];
+
+  // Reset the caption when the section (and its video) changes.
+  useEffect(() => {
+    setCaptionIdx(0);
+  }, [activeSection]);
+
+  function syncCaption() {
+    const v = videoRef.current;
+    if (!v || !v.duration || sentences.length === 0) return;
+    const frac = v.currentTime / v.duration;
+    const idx = Math.min(
+      sentences.length - 1,
+      Math.max(0, Math.floor(frac * sentences.length))
+    );
+    setCaptionIdx(idx);
+  }
 
   async function copySummary() {
     try {
@@ -1388,18 +1480,72 @@ function ResultView({
 
       <div className="result-grid">
         <div className="video-col">
-          {video?.video_url ? (
-            <video
-              key={video.video_url}
-              className="video"
-              src={video.video_url}
-              controls
-              playsInline
-              aria-label={`Video walkthrough: ${section?.title ?? "section"}`}
-            />
-          ) : (
-            <div className="video video-placeholder" role="status">
-              Section still rendering…
+          <div className="video-wrap">
+            {video?.video_url ? (
+              <video
+                ref={videoRef}
+                key={video.video_url}
+                className="video"
+                src={video.video_url}
+                controls
+                playsInline
+                onTimeUpdate={syncCaption}
+                onLoadedMetadata={syncCaption}
+                aria-label={`Video walkthrough: ${section?.title ?? "section"}`}
+              />
+            ) : (
+              <div className="video video-placeholder" role="status">
+                Section still rendering…
+              </div>
+            )}
+
+            {video?.video_url && captionsOn && sentences.length > 0 && (
+              <div className="caption-overlay" aria-live="polite">
+                <span>{sentences[captionIdx]}</span>
+              </div>
+            )}
+
+            {video?.video_url && pipDiagram && result.diagramImageUrl && (
+              <button
+                className="video-pip"
+                onClick={() => setDiagramOpen(true)}
+                type="button"
+                title="Click to enlarge the diagram"
+              >
+                <img src={result.diagramImageUrl} alt="Architecture diagram" />
+              </button>
+            )}
+          </div>
+
+          {video?.video_url && (
+            <div className="video-toolbar">
+              <button
+                className={`vtool ${captionsOn ? "vtool-on" : ""}`}
+                onClick={() => setCaptionsOn((v) => !v)}
+                type="button"
+                aria-pressed={captionsOn}
+              >
+                CC · Subtitles {captionsOn ? "on" : "off"}
+              </button>
+              {result.diagramImageUrl && (
+                <>
+                  <button
+                    className={`vtool ${pipDiagram ? "vtool-on" : ""}`}
+                    onClick={() => setPipDiagram((v) => !v)}
+                    type="button"
+                    aria-pressed={pipDiagram}
+                  >
+                    ▣ Diagram overlay {pipDiagram ? "on" : "off"}
+                  </button>
+                  <button
+                    className="vtool"
+                    onClick={() => setDiagramOpen(true)}
+                    type="button"
+                  >
+                    ⛶ Open diagram
+                  </button>
+                </>
+              )}
             </div>
           )}
 
@@ -1415,7 +1561,17 @@ function ResultView({
           )}
 
           {result.diagramImageUrl && (
-            <img className="diagram-image" src={result.diagramImageUrl} alt="Architecture diagram" />
+            <button
+              className="diagram-thumb"
+              onClick={() => setDiagramOpen(true)}
+              type="button"
+              title="Click to view the architecture diagram"
+            >
+              <img src={result.diagramImageUrl} alt="Architecture diagram" />
+              <span className="diagram-thumb-hint">
+                ⛶ Architecture diagram — click to enlarge (viewable any time)
+              </span>
+            </button>
           )}
         </div>
 
@@ -1473,6 +1629,24 @@ function ResultView({
           Do another repo
         </button>
       </div>
+
+      {/* Always-available diagram access, floating over the results screen. */}
+      {result.diagramImageUrl && (
+        <button
+          className="diagram-fab"
+          onClick={() => setDiagramOpen(true)}
+          type="button"
+          title="View the architecture diagram"
+        >
+          ◇ Diagram
+        </button>
+      )}
+      {diagramOpen && result.diagramImageUrl && (
+        <DiagramModal
+          url={result.diagramImageUrl}
+          onClose={() => setDiagramOpen(false)}
+        />
+      )}
     </div>
   );
 }
