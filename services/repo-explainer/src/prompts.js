@@ -83,10 +83,11 @@ export function buildNarrationMessages(architectureSummary, persona) {
     `- Every section MUST be between ${SECTION_WORD_TARGET.min} and ${SECTION_WORD_TARGET.max} words (~60-90 seconds spoken). Never under ${SECTION_WORD_BOUNDS.min} or over ${SECTION_WORD_BOUNDS.max} words — a downstream text-to-video service rejects long scripts, and very short sections feel abrupt. Keep the sections roughly even in length.`,
     "- End the Overview with a natural transition sentence that leads into the first deep-dive section (e.g. \"Let's start with how requests actually get handled.\").",
     "- Before finishing, silently check each section's word count is in range and rewrite any that aren't.",
+    "- For each section, also write a caption: a plain 5-8 word label summarizing what that section covers (e.g. \"Handles user login and sessions\"). No trailing period, not a full sentence — a label, not prose.",
     "",
     personaGuidance(persona),
     "",
-    'Output ONLY valid JSON in exactly this shape, with no surrounding prose or code fences: { "sections": [ { "title": string, "script": string } ] }',
+    'Output ONLY valid JSON in exactly this shape, with no surrounding prose or code fences: { "sections": [ { "title": string, "script": string, "caption": string } ] }',
   ].join("\n");
 
   const user = [
@@ -157,6 +158,33 @@ export function buildMermaidMessages(context, architectureSummary, { strict = fa
     "",
     "FILE TREE / CONTEXT:",
     context,
+  ].join("\n");
+
+  return { system, user };
+}
+
+// Maps narration sections to the Mermaid diagram node ids they discuss, so
+// the frontend can highlight the relevant node(s) while that section plays.
+// Runs after both narration and the diagram exist, since it needs both.
+export function buildDiagramHighlightMessages(sections, mermaidDiagram) {
+  const system = [
+    "You map narration sections to the Mermaid diagram nodes they discuss.",
+    "Given a Mermaid diagram and a list of narration sections, identify which node ids (the short id before the [ ] label, e.g. the \"A\" in `A[API Layer]`) each section is primarily about.",
+    "A section may map to zero, one, or several node ids. Only use ids that literally appear in the diagram below — never invent one.",
+    "A general/overview section that isn't about a specific node should map to an empty array.",
+    'Output ONLY valid JSON in exactly this shape, no code fences: { "highlights": [ { "title": string, "node_ids": string[] } ] }',
+  ].join("\n");
+
+  const sectionList = sections
+    .map((s, i) => `${i + 1}. "${s.title}": ${s.script.slice(0, 300)}`)
+    .join("\n");
+
+  const user = [
+    "MERMAID DIAGRAM:",
+    mermaidDiagram,
+    "",
+    "SECTIONS:",
+    sectionList,
   ].join("\n");
 
   return { system, user };
