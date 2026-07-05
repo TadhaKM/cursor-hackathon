@@ -61,6 +61,7 @@ export interface PipelineResult {
   sections: ExplainSection[];
   videos: VideoSection[];
   diagramImageUrl: string | null;
+  ingestion: IngestResult;
 }
 
 const INGEST_URL = import.meta.env.VITE_INGEST_URL as string | undefined;
@@ -71,6 +72,102 @@ const USING_REAL_BACKEND = Boolean(INGEST_URL && EXPLAIN_URL && RENDER_URL);
 
 export function backendMode(): "live" | "mock" {
   return USING_REAL_BACKEND ? "live" : "mock";
+}
+
+// ---------------------------------------------------------------------
+// Chat — reuses Person 2's existing RAG endpoint on the explain service
+// (services/repo-explainer/src/rag.js), which already has a working
+// Qwen key server-side. No separate chat backend or API key needed:
+//   POST {VITE_EXPLAIN_URL}/chat   Body: { ...ingestion, question }
+//   -> { answer: string, sources: string[] }
+// ---------------------------------------------------------------------
+
+export interface ChatAnswer {
+  answer: string;
+  sources: string[];
+}
+
+export function chatMode(): "live" | "mock" {
+  return EXPLAIN_URL ? "live" : "mock";
+}
+
+// Synthetic "ingestion" payload for the tool-level FAQ assistant (no repo
+// has been processed yet, or the question isn't about a specific repo).
+// The RAG endpoint falls back to the readme when key_files is empty, so
+// this gets grounded, on-topic answers about the tool itself for free.
+export const TOOL_DOCS: IngestResult = {
+  repo_url: "repo-to-video",
+  file_tree: "",
+  readme: [
+    "# repo → video",
+    "",
+    "A tool that turns a public GitHub repo into a short onboarding walkthrough video.",
+    "",
+    "## Pipeline",
+    "1. Ingest — reads the file tree, README, key files, package manifest, and recent commits from the pasted GitHub URL. Public repos only; private repos need OAuth, which isn't wired up.",
+    "2. Explain — an LLM (Qwen) turns that structure into an architecture summary and a spoken narration script, split into sections, plus an optional mermaid diagram.",
+    "3. Render — each section becomes its own short video via HeyGen, so nobody sits through one long video to find the part they need.",
+    "",
+    "## Modes",
+    "- New grad persona: explains *why* patterns exist and defines jargon.",
+    "- Senior engineer persona: skips the basics, flags what's nonstandard.",
+    "- Mock data mode: runs automatically when the backend URLs aren't configured, so the UI is always testable. A pill in the top bar shows whether you're in mock or live mode.",
+    "",
+    "## Timing",
+    "Mock mode finishes in about 5 seconds. Against the real backend, rendering takes as long as HeyGen needs per section — usually a minute or two each.",
+    "",
+    "## Limitations",
+    "If a stage fails, the app shows exactly which one and lets you retry without redoing earlier stages. Only public GitHub repos are supported right now.",
+  ].join("\n"),
+  key_files: [],
+  recent_commits: [],
+  package_manifest: "",
+};
+
+export async function askQuestion(
+  ingestion: IngestResult,
+  question: string,
+  signal?: AbortSignal
+): Promise<ChatAnswer> {
+  if (!EXPLAIN_URL) {
+    return mockAnswer(ingestion, question);
+  }
+
+  const res = await fetch(`${EXPLAIN_URL}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...ingestion, question }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const text = await safeText(res);
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text) as { error?: string };
+      detail = parsed.error ?? text;
+    } catch {
+      // keep raw text
+    }
+    throw new Error(detail || `Chat request failed (${res.status})`);
+  }
+
+  const data = (await res.json()) as { answer?: string; sources?: string[] };
+  if (!data.answer) {
+    throw new Error("Chat endpoint returned an empty answer");
+  }
+  return { answer: data.answer, sources: data.sources ?? [] };
+}
+
+function mockAnswer(ingestion: IngestResult, question: string): Promise<ChatAnswer> {
+  const subject = ingestion === TOOL_DOCS ? "the tool" : ingestion.repo_url;
+  return Promise.resolve({
+    answer:
+      `Chat is in mock mode because \`VITE_EXPLAIN_URL\` isn't set. ` +
+      `Once the repo-explainer service is deployed, I'll answer about ${subject} using its \`/chat\` endpoint (Qwen + RAG over the actual files).\n\n` +
+      `You asked: "${question}"`,
+    sources: [],
+  });
 }
 
 export async function runPipeline(
@@ -124,6 +221,7 @@ export async function runPipeline(
     sections: explainRes.narration_script.sections,
     videos: final.videos,
     diagramImageUrl: final.diagram_image_url ?? null,
+    ingestion: ingestRes,
   };
 }
 
@@ -239,5 +337,13 @@ async function runMockPipeline(
       status: "completed" as const,
     })),
     diagramImageUrl: null,
+    ingestion: {
+      repo_url: name,
+      file_tree: "src/\n  index.js\n  routes/\n  services/auth.js\npackage.json\nREADME.md",
+      readme: `# ${name}\n\nMock ingestion data — no real repo was read since the backend isn't configured.`,
+      key_files: [],
+      recent_commits: [],
+      package_manifest: "",
+    },
   };
 }

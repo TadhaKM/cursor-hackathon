@@ -3,10 +3,13 @@ import { marked } from "marked";
 import {
   runPipeline,
   backendMode,
+  TOOL_DOCS,
   type StageId,
   type PipelineResult,
   type Persona,
+  type IngestResult,
 } from "./api";
+import { ChatPanel } from "./ChatPanel";
 import "./App.css";
 
 type ViewState = "input" | "progress" | "result" | "error";
@@ -97,7 +100,7 @@ function FeatureShowcase() {
   );
 }
 
-function AskBuilder() {
+function AskBuilder({ repoIngestion, repoName }: { repoIngestion?: IngestResult; repoName?: string }) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -105,20 +108,33 @@ function AskBuilder() {
       {open && (
         <div className="ask-panel">
           <div className="ask-panel-header">
-            <span>Ask about this tool</span>
+            <span>{repoIngestion ? `Ask about ${repoName}` : "Ask about this tool"}</span>
             <button className="ask-close" onClick={() => setOpen(false)} aria-label="Close">
               ✕
             </button>
           </div>
           <div className="ask-panel-body">
-            <p className="ask-hint">
-              This becomes a real chat once a repo's been processed — for now,
-              here's what it'll eventually answer:
-            </p>
-            <div className="ask-example">"How long does a render take?"</div>
-            <div className="ask-example">"Does it work on private repos?"</div>
+            <ChatPanel
+              compact
+              ingestion={repoIngestion ?? TOOL_DOCS}
+              placeholder={
+                repoIngestion ? "Ask about this codebase…" : "Ask how repo → video works…"
+              }
+              hint={
+                repoIngestion
+                  ? "Powered by Qwen (via the repo-explainer service) — grounded in this repo's actual files."
+                  : "Powered by Qwen (via the repo-explainer service) — ask about the pipeline, timing, or limitations."
+              }
+              examples={
+                repoIngestion
+                  ? [
+                      "Why is auth separate from the API layer?",
+                      "What should I read first in this repo?",
+                    ]
+                  : ["How long does a render take?", "Does it work on private repos?"]
+              }
+            />
           </div>
-          <input className="chat-input ask-input" disabled placeholder="Coming soon" />
         </div>
       )}
       <button className="ask-fab" onClick={() => setOpen((v) => !v)}>
@@ -280,7 +296,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "Can I ask questions about the codebase afterward?",
-    a: "That's the floating \"?\" button in the corner and the chat box under results — both are placeholders right now. Once wired up, they'll answer questions using the same context the video was generated from.",
+    a: "Yes — use the chat box under your walkthrough results, or the floating \"?\" button in the corner. Both call the same Qwen-powered RAG endpoint the explainer service exposes. On the results page they answer using the repo's actual files; elsewhere the \"?\" button answers general tool questions.",
   },
   {
     q: "Why only three pipeline stages?",
@@ -398,7 +414,40 @@ function ChangelogPage() {
   );
 }
 
+const RECENTS_KEY = "repo-to-video:recent-repos";
+
+function loadRecents(): string[] {
+  try {
+    const raw = window.localStorage.getItem(RECENTS_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecent(repo: string) {
+  try {
+    const current = loadRecents().filter((r) => r !== repo);
+    const next = [repo, ...current].slice(0, 5);
+    window.localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+  } catch {
+    // localStorage unavailable — recents just won't persist, no big deal
+  }
+}
+
 function App() {
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof window === "undefined") return "light";
+    const saved = window.localStorage.getItem("theme");
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    window.localStorage.setItem("theme", theme);
+  }, [theme]);
+
   const [page, setPage] = useState<Page>("app");
   const [view, setView] = useState<ViewState>("input");
   const [repoUrl, setRepoUrl] = useState("");
@@ -411,7 +460,12 @@ function App() {
   const [result, setResult] = useState<PipelineResult | null>(null);
   const [activeSection, setActiveSection] = useState(0);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [recents, setRecents] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setRecents(loadRecents());
+  }, []);
 
   function runDemo() {
     const repo = DEMO_REPOS[Math.floor(Math.random() * DEMO_REPOS.length)];
@@ -453,6 +507,8 @@ function App() {
       setResult(res);
       setActiveSection(0);
       setView("result");
+      saveRecent(trimmed);
+      setRecents(loadRecents());
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
       setView("error");
@@ -489,6 +545,14 @@ function App() {
           <button className="demo-btn" onClick={runDemo} title="Runs the pipeline against a real public repo">
             ▶ Try a demo
           </button>
+          <button
+            className="theme-toggle"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            aria-label="Toggle dark mode"
+            title="Toggle dark mode"
+          >
+            {theme === "light" ? "🌙" : "☀️"}
+          </button>
         </div>
       </header>
 
@@ -510,6 +574,7 @@ function App() {
                 persona={persona}
                 onPersonaChange={setPersona}
                 onSubmit={() => start()}
+                recents={recents}
               />
               <FeatureShowcase />
             </>
@@ -541,7 +606,7 @@ function App() {
         </div>
       </main>
 
-      <AskBuilder />
+      <AskBuilder repoIngestion={result?.ingestion} repoName={result?.repo} />
     </div>
   );
 }
@@ -594,6 +659,7 @@ function InputView({
   persona,
   onPersonaChange,
   onSubmit,
+  recents,
 }: {
   repoUrl: string;
   onChange: (v: string) => void;
@@ -601,6 +667,7 @@ function InputView({
   persona: Persona;
   onPersonaChange: (p: Persona) => void;
   onSubmit: () => void;
+  recents: string[];
 }) {
   const examples = [
     "github.com/expressjs/express",
@@ -642,6 +709,17 @@ function InputView({
             </button>
           ))}
         </div>
+
+        {recents.length > 0 && (
+          <div className="chip-row">
+            <span className="chip-label">recent</span>
+            {recents.map((ex) => (
+              <button key={ex} className="chip chip-recent" onClick={() => onChange(ex)}>
+                {ex.replace("github.com/", "")}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="persona-row">
           <span className="persona-label">Explain it for a</span>
@@ -741,6 +819,17 @@ function ResultView({
 }) {
   const video = result.videos[activeSection];
   const [summaryHtml, setSummaryHtml] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  async function copySummary() {
+    try {
+      await navigator.clipboard.writeText(result.architectureSummary);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard API unavailable — nothing to do, button just won't confirm
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -787,9 +876,14 @@ function ResultView({
             ))}
           </ul>
 
-          <button className="summary-toggle" onClick={onToggleSummary}>
-            {summaryOpen ? "▾" : "▸"} Read the full summary
-          </button>
+          <div className="summary-row">
+            <button className="summary-toggle" onClick={onToggleSummary}>
+              {summaryOpen ? "▾" : "▸"} Read the full summary
+            </button>
+            <button className="copy-btn" onClick={copySummary}>
+              {copied ? "✓ Copied" : "Copy summary"}
+            </button>
+          </div>
           {summaryOpen && (
             <div
               className="summary-markdown"
@@ -800,10 +894,14 @@ function ResultView({
       </div>
 
       <div className="chat-row">
-        <input
-          className="chat-input"
-          disabled
-          placeholder="Ask a question about this codebase (coming soon)"
+        <ChatPanel
+          ingestion={result.ingestion}
+          placeholder="Ask a question about this codebase…"
+          hint="Powered by Qwen (via the repo-explainer service) — grounded in this repo's actual files."
+          examples={[
+            "Why is auth separate from the API layer?",
+            "What happens if the token expires?",
+          ]}
         />
       </div>
 
