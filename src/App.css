@@ -3037,6 +3037,16 @@ h3 {
   color: var(--text-faint);
 }
 
+/* Static caption line under the diagram thumbnail — distinct from
+   DiagramPanel's floating .diagram-caption tooltip (position: absolute,
+   positioned via inline style), which this must not collide with. */
+.diagram-thumb-caption {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: var(--text-mono-xs);
+  color: var(--text-faint);
+}
+
 /* Floating "Diagram" button — available at any point on the results screen. */
 .diagram-fab {
   position: fixed;
@@ -3128,7 +3138,8 @@ h3 {
   justify-content: center;
   align-items: flex-start;
 }
-.diagram-modal-body img {
+.diagram-modal-body img,
+.diagram-modal-body .diagram-modal-svg svg {
   max-width: 100%;
   height: auto;
   display: block;
@@ -3136,7 +3147,8 @@ h3 {
 .diagram-modal-body-zoom {
   align-items: flex-start;
 }
-.diagram-modal-body-zoom img {
+.diagram-modal-body-zoom img,
+.diagram-modal-body-zoom .diagram-modal-svg svg {
   max-width: none;
   width: auto;
   cursor: grab;

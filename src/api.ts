@@ -32,6 +32,14 @@ export interface IngestResult {
 export interface ExplainSection {
   title: string;
   script: string;
+  // Short (5-8 word) label summarizing the section, e.g. "Handles user
+  // login and sessions" — for a caption near the diagram, not the video.
+  caption?: string | null;
+  // Mermaid diagram node ids (from mermaid_diagram) this section discusses,
+  // e.g. ["B"] for a node declared as `B[Auth Module]` — used to highlight
+  // the relevant node(s) while this section plays. Empty for general
+  // sections not tied to a specific node.
+  node_ids?: string[];
 }
 
 export interface ExplainResult {
@@ -67,7 +75,14 @@ export interface PipelineResult {
   sections: ExplainSection[];
   videos: VideoSection[];
   diagramImageUrl: string | null;
+  // Raw mermaid source (not the rendered PNG) — needed to render the
+  // diagram client-side so individual nodes can be highlighted per section.
   mermaidDiagram: string | null;
+  // Backend-provided node highlights (from repo-explainer's per-section
+  // node_ids, see ExplainSection) — takes priority over DiagramPanel's
+  // client-side title-matching heuristic in resolveDiagramHighlights()
+  // when present, since this is grounded in the actual narration script
+  // rather than a label-text guess.
   diagramHighlights?: DiagramHighlight[];
   ingestion: IngestResult;
 }
@@ -288,6 +303,22 @@ function mockAnswer(_ingestion: IngestResult, question: string): Promise<ChatAns
   });
 }
 
+// Bridges repo-explainer's per-section node_ids (grounded in the actual
+// narration, via a dedicated Qwen/Gemini call) into DiagramPanel's
+// DiagramHighlight[] shape, which otherwise only ever gets populated by
+// resolveDiagramHighlights()'s client-side title-matching heuristic.
+// DiagramHighlight is one node per section; a section with multiple
+// node_ids just contributes its first (the primary node it discusses).
+function sectionsToDiagramHighlights(sections: ExplainSection[]): DiagramHighlight[] {
+  const highlights: DiagramHighlight[] = [];
+  sections.forEach((s, i) => {
+    const nodeId = s.node_ids?.[0];
+    if (!nodeId) return;
+    highlights.push({ section_index: i, node_id: nodeId, caption: s.caption ?? s.title });
+  });
+  return highlights;
+}
+
 export async function runPipeline(
   repoUrl: string,
   persona: Persona,
@@ -340,6 +371,7 @@ export async function runPipeline(
     videos: final.videos,
     diagramImageUrl: final.diagram_image_url ?? null,
     mermaidDiagram: explainRes.mermaid_diagram,
+    diagramHighlights: sectionsToDiagramHighlights(explainRes.narration_script.sections),
     ingestion: ingestRes,
   };
 }
@@ -503,10 +535,16 @@ function wait(ms: number, signal?: AbortSignal) {
 // so the UI is fully testable before any real backend exists.
 // ---------------------------------------------------------------------
 
+const MOCK_MERMAID_DIAGRAM = `graph TD
+  A[Client] --> B[API Layer]
+  B --> C[Auth Module]
+  B --> D[Core Logic]
+  D --> E[(Database)]`;
+
 const MOCK_SECTIONS: ExplainSection[] = [
-  { title: "Overview", script: "This project is a modular service with a clear entry point and a small set of core routes." },
-  { title: "Auth Module", script: "Authentication is handled in a dedicated module, separating login and token logic from the rest of the app." },
-  { title: "API Layer", script: "The API layer routes requests into core logic and talks to the database through a thin data-access layer." },
+  { title: "Overview", script: "This project is a modular service with a clear entry point and a small set of core routes.", caption: null, node_ids: [] },
+  { title: "Auth Module", script: "Authentication is handled in a dedicated module, separating login and token logic from the rest of the app.", caption: "Handles login and session tokens", node_ids: ["C"] },
+  { title: "API Layer", script: "The API layer routes requests into core logic and talks to the database through a thin data-access layer.", caption: "Routes requests to core logic", node_ids: ["B", "D"] },
 ];
 
 async function runMockPipeline(
@@ -524,12 +562,6 @@ async function runMockPipeline(
   onStage({ stage: "render", ok: true });
 
   const name = repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || "example/demo-repo";
-  const mockMermaid = [
-    "graph TD",
-    "  A[Overview] --> B[Auth Module]",
-    "  B --> C[API Layer]",
-    "  C --> D[Database]",
-  ].join("\n");
 
   return {
     repo: name,
@@ -544,7 +576,10 @@ async function runMockPipeline(
       status: "completed" as const,
     })),
     diagramImageUrl: null,
-    mermaidDiagram: mockMermaid,
+    // MOCK_MERMAID_DIAGRAM's node lettering (A-E) matches MOCK_SECTIONS'
+    // node_ids above — keep them in sync if either changes.
+    mermaidDiagram: MOCK_MERMAID_DIAGRAM,
+    diagramHighlights: sectionsToDiagramHighlights(MOCK_SECTIONS),
     ingestion: {
       repo_url: name,
       file_tree:

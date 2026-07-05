@@ -1532,7 +1532,18 @@ function splitSentences(text: string): string[] {
 // Full-screen, click-to-zoom architecture-diagram viewer. Reachable at any
 // point via the floating "Diagram" button, the toolbar, the thumbnail, and the
 // picture-in-picture overlay. Esc or a backdrop click closes it.
-function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
+//
+// Renders the flat diagramImageUrl PNG only — the persistent DiagramPanel
+// (see App.tsx's ResultView) is the one place that does live SVG rendering
+// and per-node highlighting, so this stays a simple zoomable copy rather
+// than a second rendering system.
+function DiagramModal({
+  imageUrl,
+  onClose,
+}: {
+  imageUrl: string | null;
+  onClose: () => void;
+}) {
   const [zoom, setZoom] = useState(false);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1560,14 +1571,16 @@ function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
             >
               {zoom ? "Fit" : "Zoom"}
             </button>
-            <a
-              className="diagram-modal-btn"
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open ↗
-            </a>
+            {imageUrl && (
+              <a
+                className="diagram-modal-btn"
+                href={imageUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open ↗
+              </a>
+            )}
             <button
               className="diagram-modal-btn diagram-modal-close"
               onClick={onClose}
@@ -1581,7 +1594,7 @@ function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
         <div
           className={`diagram-modal-body ${zoom ? "diagram-modal-body-zoom" : ""}`}
         >
-          <img src={url} alt="Architecture diagram" />
+          <img src={imageUrl ?? ""} alt="Architecture diagram" />
         </div>
       </div>
     </div>
@@ -1691,6 +1704,8 @@ function ResultView({
   const [pipDiagram, setPipDiagram] = useState(false);
   const [diagramOpen, setDiagramOpen] = useState(false);
   const sentences = section ? splitSentences(section.script) : [];
+  const hasDiagram = Boolean(result.mermaidDiagram || result.diagramImageUrl);
+  const activeNodeIds = section?.node_ids ?? [];
 
   // Reset caption + progress when the section (and its video) changes.
   useEffect(() => {
@@ -1822,14 +1837,14 @@ function ResultView({
               </div>
             )}
 
-            {video?.video_url && pipDiagram && result.diagramImageUrl && (
+            {video?.video_url && pipDiagram && hasDiagram && (
               <button
                 className="video-pip"
                 onClick={() => setDiagramOpen(true)}
                 type="button"
                 title="Click to enlarge the diagram"
               >
-                <img src={result.diagramImageUrl} alt="Architecture diagram" />
+                <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
               </button>
             )}
           </div>
@@ -1844,7 +1859,7 @@ function ResultView({
               >
                 CC · Subtitles {captionsOn ? "on" : "off"}
               </button>
-              {result.diagramImageUrl && (
+              {hasDiagram && (
                 <>
                   <button
                     className={`vtool ${pipDiagram ? "vtool-on" : ""}`}
@@ -1892,18 +1907,21 @@ function ResultView({
             </div>
           )}
 
-          {result.diagramImageUrl && (
+          {hasDiagram && (
             <button
               className="diagram-thumb"
               onClick={() => setDiagramOpen(true)}
               type="button"
               title="Click to view the architecture diagram"
             >
-              <img src={result.diagramImageUrl} alt="Architecture diagram" />
+              <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
               <span className="diagram-thumb-hint">
                 ⛶ Architecture diagram — click to enlarge (viewable any time)
               </span>
             </button>
+          )}
+          {activeNodeIds.length > 0 && section?.caption && (
+            <p className="diagram-thumb-caption">📍 {section.caption}</p>
           )}
         </div>
 
@@ -1952,7 +1970,7 @@ function ResultView({
       </div>
 
       {/* Always-available diagram access, floating over the results screen. */}
-      {result.diagramImageUrl && (
+      {hasDiagram && (
         <button
           className="diagram-fab"
           onClick={() => setDiagramOpen(true)}
@@ -1962,9 +1980,9 @@ function ResultView({
           ◇ Diagram
         </button>
       )}
-      {diagramOpen && result.diagramImageUrl && (
+      {diagramOpen && hasDiagram && (
         <DiagramModal
-          url={result.diagramImageUrl}
+          imageUrl={result.diagramImageUrl}
           onClose={() => setDiagramOpen(false)}
         />
       )}

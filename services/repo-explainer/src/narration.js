@@ -16,6 +16,7 @@ export function withCounts(section) {
   return {
     title: String(section.title ?? "").trim() || "Section",
     script,
+    caption: section.caption ? String(section.caption).trim() : null,
     word_count: countWords(script),
     char_count: script.length,
   };
@@ -46,7 +47,7 @@ export function capScript(script) {
 /**
  * Parses the narration model output (JSON) into a normalized, HeyGen-safe shape.
  * Accepts stray code fences and a bare array as fallbacks.
- * @returns {{ sections: {title:string, script:string, word_count:number, char_count:number}[] }}
+ * @returns {{ sections: {title:string, script:string, caption:string|null, word_count:number, char_count:number}[] }}
  */
 export function parseNarration(raw) {
   let text = String(raw).trim();
@@ -77,6 +78,7 @@ export function parseNarration(raw) {
       return {
         title: String(s?.title ?? s?.name ?? `Section ${i + 1}`).trim(),
         script,
+        caption: s?.caption ? String(s.caption).trim() : null,
         word_count: countWords(script),
         char_count: script.length,
       };
