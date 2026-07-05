@@ -21,8 +21,9 @@ app.mount("/static", StaticFiles(directory=str(diagram.STATIC_DIR.parent / "stat
 
 
 @app.get("/")
+@app.get("/health")
 async def health():
-    return {"ok": True}
+    return {"ok": True, "service": "video-renderer"}
 
 
 @app.post("/render", response_model=JobState)
