@@ -1,4 +1,4 @@
-import { chat } from "./qwenClient.js";
+import { chat } from "./geminiClient.js";
 import { buildDiffNarrationMessages, normalizePersona } from "./prompts.js";
 import { withCounts } from "./narration.js";
 import { refineSectionLengths } from "./explain.js";

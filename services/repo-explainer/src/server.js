@@ -151,7 +151,7 @@ if (isMain) {
     console.log(`  model:   ${config.model}`);
     console.log(`  baseURL: ${config.baseUrl}`);
     if (!config.apiKey) {
-      console.warn("  WARNING: QWEN_API_KEY is not set — /explain will 500 until it is.");
+      console.warn("  WARNING: GEMINI_API_KEY is not set — /explain will 500 until it is.");
     }
   });
 }

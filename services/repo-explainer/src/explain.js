@@ -1,4 +1,4 @@
-import { chat } from "./qwenClient.js";
+import { chat } from "./geminiClient.js";
 import { config } from "./config.js";
 import { normalizeIngestion, renderContext, hasUsableContent } from "./ingestion.js";
 import {
@@ -137,10 +137,7 @@ async function generateMermaid(context, architectureSummary) {
 }
 
 /**
- * Runs the full explanation pipeline: architecture summary -> narration
- * script -> mermaid diagram -> diagram-highlight mapping (plus a resize
- * retry per out-of-bounds section). Each narration section carries a
- * `caption` and `node_ids` (diagram nodes it discusses) alongside its script.
+
  *
  * @param {object} payload Ingestion JSON, optionally with a `persona` field.
  * @param {object} [opts]
@@ -171,7 +168,7 @@ export async function explainRepo(payload = {}, opts = {}) {
     label: "architecture",
   });
 
-  // 2) Narration script (retries once via qwenClient; parse can also fail).
+  // 2) Narration script (retries once via geminiClient; parse can also fail).
   const narrMsgs = buildNarrationMessages(architectureSummary, persona);
   const narrationRaw = await chat({
     ...narrMsgs,

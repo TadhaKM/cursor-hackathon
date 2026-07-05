@@ -3,7 +3,7 @@
 "Person 2" of the repo → onboarding-video pipeline.
 
 Takes the **ingestion output** (file tree, README, key files, recent commits,
-package manifest) and calls the **Alibaba Qwen Model Studio** API
+package manifest) and calls the **Google AI Studio (Gemini)** API
 (OpenAI-compatible endpoint) to produce three things:
 
 1. **Architecture summary** — a concrete markdown write-up of what the project
@@ -19,7 +19,7 @@ package manifest) and calls the **Alibaba Qwen Model Studio** API
 ```bash
 cd services/repo-explainer
 npm install
-cp .env.example .env      # then paste your QWEN_API_KEY
+cp .env.example .env      # then paste your GEMINI_API_KEY
 npm start                 # boots on http://localhost:8787
 ```
 
@@ -27,11 +27,11 @@ Environment variables (see `.env.example`):
 
 | Var               | Default                                                        | Notes                                   |
 | ----------------- | ------------------------------------------------------------- | --------------------------------------- |
-| `QWEN_API_KEY`    | —                                                             | **Required.** Model Studio / DashScope. |
-| `QWEN_BASE_URL`   | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`      | Intl endpoint. CN drops the `-intl`.    |
-| `QWEN_MODEL`      | `qwen-max`                                                    | `qwen-plus` is faster/cheaper.          |
-| `QWEN_TIMEOUT_MS` | `30000`                                                       | Per call (3 sequential calls).          |
-| `QWEN_MAX_RETRIES`| `1`                                                          | Retries per call (2 attempts total).    |
+| `GEMINI_API_KEY`    | —                                                             | **Required.** Model Studio / DashScope. |
+| `GEMINI_BASE_URL`   | `https://generativelanguage.googleapis.com/v1beta/openai`      | Intl endpoint. CN drops the `-intl`.    |
+| `GEMINI_MODEL`      | `gemini-2.5-flash`                                                    | `gemini-2.5-flash-lite` is faster/cheaper.          |
+| `GEMINI_TIMEOUT_MS` | `30000`                                                       | Per call (3 sequential calls).          |
+| `GEMINI_MAX_RETRIES`| `1`                                                          | Retries per call (2 attempts total).    |
 | `PORT`            | `8787`                                                        | HTTP port.                              |
 
 ## API
@@ -68,7 +68,7 @@ Response:
     ]
   },
   "mermaid_diagram": "graph TD\n  A[server.js] --> B[routes]",  // string | null
-  "meta": { "persona": "new_grad", "model": "qwen-max", "elapsed_ms": 12873, "section_count": 4 }
+  "meta": { "persona": "new_grad", "model": "gemini-2.5-flash", "elapsed_ms": 12873, "section_count": 4 }
 }
 ```
 
@@ -110,7 +110,7 @@ Response (illustrative — section text abbreviated; shape is exact):
     ]
   },
   "mermaid_diagram": "graph TD\n  A[server.js] --> B[auth routes]\n  A --> C[requireAuth]\n  C --> D[todo routes]\n  D --> E[db/index.js]\n  B --> E",
-  "meta": { "persona": "new_grad", "model": "qwen-max", "elapsed_ms": 14231, "section_count": 4 }
+  "meta": { "persona": "new_grad", "model": "gemini-2.5-flash", "elapsed_ms": 14231, "section_count": 4 }
 }
 ```
 
@@ -122,7 +122,7 @@ Response (illustrative — section text abbreviated; shape is exact):
 
 Ask questions about the repo. The service chunks `key_files`, retrieves the most
 relevant chunks with a dependency-free TF-IDF keyword score, and answers with
-Qwen — grounded in the actual code.
+Gemini — grounded in the actual code.
 
 Body: the ingestion JSON plus a `question`.
 
@@ -140,7 +140,7 @@ Response:
 {
   "answer": "Auth is JWT-based. src/middleware/auth.js reads the Bearer token...",
   "sources": ["src/middleware/auth.js#1"],
-  "meta": { "model": "qwen-max" }
+  "meta": { "model": "gemini-2.5-flash" }
 }
 ```
 
@@ -150,7 +150,7 @@ Returns `{ ok, service, model, apiKeyConfigured }`.
 
 ## How it works
 
-Three sequential Qwen chat-completions calls (`src/explain.js`):
+Three sequential Gemini chat-completions calls (`src/explain.js`):
 
 1. `buildArchitectureMessages` → architecture summary.
 2. `buildNarrationMessages` → narration JSON. Parsed, then **word-count
@@ -162,7 +162,7 @@ Three sequential Qwen chat-completions calls (`src/explain.js`):
    it isn't parseable, it retries **once** with a stricter prompt, and is
    **omitted** (`null`) rather than sending broken syntax downstream.
 
-Each call has a 30s timeout and one retry (`src/qwenClient.js`).
+Each call has a 30s timeout and one retry (`src/geminiClient.js`).
 
 ## Errors
 
@@ -174,10 +174,10 @@ stack trace or HTML.
 | Malformed JSON body / non-object / empty    | `400`  | `bad_request` |
 | Ingestion had no usable content             | `400`  | `bad_request` |
 | Body too large (>10mb)                      | `413`  | `bad_request` |
-| `QWEN_API_KEY` not set                      | `500`  | `config`      |
-| Qwen auth error (bad key) — logged loudly   | `500`  | `auth`        |
-| Qwen call timed out (>30s)                  | `504`  | `timeout`     |
-| Other upstream Qwen failure                 | `502`  | `upstream`    |
+| `GEMINI_API_KEY` not set                      | `500`  | `config`      |
+| Gemini auth error (bad key) — logged loudly   | `500`  | `auth`        |
+| Gemini call timed out (>30s)                  | `504`  | `timeout`     |
+| Other upstream Gemini failure                 | `502`  | `upstream`    |
 
 The mermaid step never fails the request — an invalid diagram is returned as
 `null`.
@@ -200,9 +200,9 @@ at **1,800 characters** at a sentence boundary, so no section can overflow HeyGe
 
 ```bash
 npm test                    # offline unit tests (no API key needed)
-npm run smoke               # full pipeline against real Qwen (needs QWEN_API_KEY)
+npm run smoke               # full pipeline against real Gemini (needs GEMINI_API_KEY)
 npm run smoke -- path/to/ingestion.json
-npm run quality             # narration quality pass over all fixtures (needs QWEN_API_KEY)
+npm run quality             # narration quality pass over all fixtures (needs GEMINI_API_KEY)
 ```
 
 Fixtures for the quality pass live in `examples/`:
@@ -225,7 +225,7 @@ narration quality holds on real repos:
 
 ```bash
 INGEST_URL=http://localhost:8000/repo-summary-input \
-QWEN_API_KEY=sk-... \
+GEMINI_API_KEY=sk-... \
 node scripts/from-ingest.js https://github.com/owner/repo
 ```
 

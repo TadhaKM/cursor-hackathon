@@ -11,7 +11,7 @@ export function normalizePersona(persona) {
 
 // Per-section spoken-word budget. HeyGen caps a single avatar script at 5,000
 // characters (~3 min); ~150-200 words (~60-90s) reads best.
-//   - TARGET is what we ask Qwen to hit.
+//   - TARGET is what we ask Gemini to hit.
 //   - BOUNDS is the acceptable range we validate against; sections outside it
 //     trigger one targeted resize retry.
 export const SECTION_WORD_TARGET = { min: 150, max: 200 };

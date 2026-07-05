@@ -13,7 +13,7 @@ import { parseNarration, capScript, countWords } from "../src/narration.js";
 import { buildChunks, retrieve } from "../src/rag.js";
 import { classifySectionLength, withCounts } from "../src/narration.js";
 import { refineSectionLengths } from "../src/explain.js";
-import { classifyQwenError } from "../src/qwenClient.js";
+import { classifyGeminiError } from "../src/geminiClient.js";
 
 test("cleanMermaid strips code fences and prose preamble", () => {
   const raw = "Here you go:\n```mermaid\ngraph TD\n  A[App] --> B[DB]\n```";
@@ -173,20 +173,20 @@ test("refineSectionLengths keeps original when resize call fails", async () => {
   assert.equal(out[0].title, "Big");
 });
 
-test("classifyQwenError maps timeout/auth/other to status codes", () => {
-  assert.deepEqual(classifyQwenError({ code: "ETIMEDOUT" }), {
+test("classifyGeminiError maps timeout/auth/other to status codes", () => {
+  assert.deepEqual(classifyGeminiError({ code: "ETIMEDOUT" }), {
     statusCode: 504,
     kind: "timeout",
   });
-  assert.deepEqual(classifyQwenError({ message: "Request timed out" }), {
+  assert.deepEqual(classifyGeminiError({ message: "Request timed out" }), {
     statusCode: 504,
     kind: "timeout",
   });
-  assert.deepEqual(classifyQwenError({ status: 401 }), {
+  assert.deepEqual(classifyGeminiError({ status: 401 }), {
     statusCode: 500,
     kind: "auth",
   });
-  assert.deepEqual(classifyQwenError({ status: 500 }), {
+  assert.deepEqual(classifyGeminiError({ status: 500 }), {
     statusCode: 502,
     kind: "upstream",
   });

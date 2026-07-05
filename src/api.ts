@@ -148,7 +148,7 @@ export function backendMode(): "live" | "mock" {
 // GEMINI_API_KEY never ships to the browser:
 //   POST {VITE_CHAT_URL}   Body: { context_type, question, ingestion }
 //   -> { answer: string, sources: string[] }
-// Pipeline /explain still uses VITE_EXPLAIN_URL (Person 2's Qwen service).
+// Pipeline /explain still uses VITE_EXPLAIN_URL (Person 2's Gemini service).
 // ---------------------------------------------------------------------
 
 const CHAT_URL = import.meta.env.VITE_CHAT_URL as string | undefined;
@@ -179,9 +179,9 @@ export function chatMode(): "live" | "mock" {
   return CHAT_URL || EXPLAIN_URL ? "live" : "mock";
 }
 
-export function chatBackend(): "gemini" | "qwen" | "mock" {
+export function chatBackend(): "gemini" | "explain" | "mock" {
   if (CHAT_URL) return "gemini";
-  if (EXPLAIN_URL) return "qwen";
+  if (EXPLAIN_URL) return "explain";
   return "mock";
 }
 
@@ -197,7 +197,7 @@ export const TOOL_DOCS: IngestResult = {
     "",
     "## Pipeline",
     "1. Ingest — reads the file tree, README, key files, package manifest, and recent commits from the pasted GitHub URL. Public repos only; private repos need OAuth, which isn't wired up.",
-    "2. Explain — an LLM (Qwen) turns that structure into an architecture summary and a spoken narration script, split into sections, plus an optional mermaid diagram.",
+    "2. Explain — an LLM (Gemini) turns that structure into an architecture summary and a spoken narration script, split into sections, plus an optional mermaid diagram.",
     "3. Render — each section becomes its own short video via HeyGen, so nobody sits through one long video to find the part they need.",
     "",
     "## Modes",
@@ -280,7 +280,7 @@ export async function askQuestion(
     return parseChatResponse(res);
   }
 
-  // Person 2's RAG chat — same ingestion payload, Qwen + TF-IDF over key files
+  // Person 2's RAG chat — same ingestion payload, Gemini + TF-IDF over key files
   if (EXPLAIN_URL && contextType === "repo") {
     const res = await fetch(`${EXPLAIN_URL}/chat`, {
       method: "POST",
@@ -297,7 +297,7 @@ export async function askQuestion(
 function mockAnswer(_ingestion: IngestResult, question: string): Promise<ChatAnswer> {
   return Promise.resolve({
     answer:
-      `Chat is in mock mode — set \`VITE_EXPLAIN_URL\` (Person 2's Qwen RAG) or \`VITE_CHAT_URL\` (Gemini proxy).\n\n` +
+      `Chat is in mock mode — set \`VITE_EXPLAIN_URL\` (Person 2's Gemini RAG) or \`VITE_CHAT_URL\` (Gemini proxy).\n\n` +
       `You asked: "${question}"`,
     sources: [],
   });
