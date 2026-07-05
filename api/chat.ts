@@ -126,7 +126,7 @@ function systemPrompt(contextType: "repo" | "tool"): string {
 }
 
 async function callGemini(system: string, userPrompt: string): Promise<string> {
-  const url = `https://generativeai.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
   const res = await fetch(url, {
     method: "POST",
