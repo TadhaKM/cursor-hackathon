@@ -105,6 +105,7 @@ export async function chat({
         {
           model: config.model,
           temperature,
+          max_tokens: config.maxTokens,
           messages: [
             { role: "system", content: system },
             { role: "user", content: user },
