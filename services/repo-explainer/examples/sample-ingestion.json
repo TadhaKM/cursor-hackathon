@@ -1,0 +1,44 @@
+{
+  "persona": "new_grad",
+  "file_tree": [
+    "src/server.js",
+    "src/config.js",
+    "src/routes/auth.js",
+    "src/routes/todos.js",
+    "src/db/index.js",
+    "src/db/migrations/001_init.sql",
+    "src/middleware/auth.js",
+    "test/todos.test.js",
+    "package.json",
+    "README.md"
+  ],
+  "readme": "# TodoAPI\n\nA small REST API for managing todos with JWT auth. Built with Express and SQLite. Run `npm start` to launch on port 3000. Auth endpoints live under /auth, todo CRUD under /todos.",
+  "package_manifest": {
+    "name": "todo-api",
+    "dependencies": {
+      "express": "^4.18.0",
+      "jsonwebtoken": "^9.0.0",
+      "better-sqlite3": "^9.0.0"
+    },
+    "scripts": { "start": "node src/server.js", "test": "node --test" }
+  },
+  "key_files": [
+    {
+      "path": "src/server.js",
+      "content": "import express from 'express';\nimport authRoutes from './routes/auth.js';\nimport todoRoutes from './routes/todos.js';\nimport { requireAuth } from './middleware/auth.js';\n\nconst app = express();\napp.use(express.json());\napp.use('/auth', authRoutes);\napp.use('/todos', requireAuth, todoRoutes);\napp.listen(3000);"
+    },
+    {
+      "path": "src/middleware/auth.js",
+      "content": "import jwt from 'jsonwebtoken';\nexport function requireAuth(req, res, next) {\n  const token = req.headers.authorization?.split(' ')[1];\n  if (!token) return res.status(401).json({ error: 'missing token' });\n  try { req.user = jwt.verify(token, process.env.JWT_SECRET); next(); }\n  catch { res.status(401).json({ error: 'bad token' }); }\n}"
+    },
+    {
+      "path": "src/db/index.js",
+      "content": "import Database from 'better-sqlite3';\nconst db = new Database('todos.db');\nexport default db;"
+    }
+  ],
+  "recent_commits": [
+    { "sha": "a1b2c3d4", "author": "Dana", "message": "Add JWT auth middleware" },
+    { "sha": "e5f6a7b8", "author": "Sam", "message": "Switch DB layer to better-sqlite3" },
+    { "sha": "c9d0e1f2", "author": "Dana", "message": "Add /todos CRUD routes and tests" }
+  ]
+}
