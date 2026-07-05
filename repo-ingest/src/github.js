@@ -66,7 +66,18 @@ export function parseRepoUrl(repoUrl) {
   let owner;
   let repo;
 
-  const trimmed = repoUrl.trim();
+  let trimmed = repoUrl.trim();
+
+  // Accept scheme-less URLs like "github.com/owner/repo" or
+  // "www.github.com/owner/repo" (a dotted host before the first slash, with no
+  // scheme) by assuming https. Plain "owner/repo" shorthand has no dot, so it's
+  // left for the shorthand path below.
+  if (
+    !/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) &&
+    /^[^/\s]+\.[^/\s]+\//.test(trimmed)
+  ) {
+    trimmed = "https://" + trimmed;
+  }
 
   // Try to parse as a full URL first.
   try {
