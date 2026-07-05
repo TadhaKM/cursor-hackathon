@@ -15,6 +15,11 @@ export const config = {
   port: int(process.env.PORT, 8787),
   // 1 retry means 2 total attempts per Qwen call.
   maxRetries: int(process.env.QWEN_MAX_RETRIES, 1),
+  // Rate-limit (429) gets its own, more generous retry budget: free-tier
+  // Gemini/Qwen keys throttle a multi-call /explain run, and the server tells
+  // us how long to wait, so honoring that recovers automatically.
+  rateLimitMaxRetries: int(process.env.QWEN_RATE_LIMIT_RETRIES, 4),
+  rateLimitMaxDelayMs: int(process.env.QWEN_RATE_LIMIT_MAX_DELAY_MS, 35000),
 };
 
 export function assertApiKey() {

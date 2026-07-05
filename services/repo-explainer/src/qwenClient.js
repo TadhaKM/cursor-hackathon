@@ -36,7 +36,49 @@ export function classifyQwenError(err) {
     status === 403;
   if (isAuth) return { statusCode: 500, kind: "auth" };
 
+  const isRateLimit =
+    err instanceof OpenAI.RateLimitError ||
+    status === 429 ||
+    msg.includes("rate limit") ||
+    msg.includes("resource_exhausted") ||
+    msg.includes("quota");
+  if (isRateLimit) return { statusCode: 429, kind: "rate_limit" };
+
+  // 503 / "model is overloaded" is transient — worth backing off and retrying.
+  const isOverloaded =
+    status === 503 ||
+    msg.includes("overloaded") ||
+    msg.includes("unavailable") ||
+    msg.includes("try again");
+  if (isOverloaded) return { statusCode: 503, kind: "overloaded" };
+
   return { statusCode: 502, kind: "upstream" };
+}
+
+// Pull a "how long to wait" hint out of a 429 error. Tries the standard
+// Retry-After header, then the RetryInfo/"retry in Xs" hints the Gemini and
+// Qwen compat layers put in the body/message. Falls back to escalating backoff.
+export function retryDelayMsFor(err, attempt, capMs = 35000) {
+  const header =
+    err?.headers?.["retry-after"] ?? err?.response?.headers?.["retry-after"];
+  const headerSec = Number.parseFloat(header);
+  if (Number.isFinite(headerSec) && headerSec > 0) {
+    return Math.min(headerSec * 1000, capMs);
+  }
+
+  const text = `${err?.message ?? ""} ${
+    typeof err?.error === "object" ? JSON.stringify(err.error) : err?.error ?? ""
+  }`;
+  const match =
+    text.match(/retry(?:Delay)?["\s:]*?([\d.]+)\s*s/i) ||
+    text.match(/retry in\s*([\d.]+)\s*s/i);
+  if (match) {
+    const sec = Number.parseFloat(match[1]);
+    if (Number.isFinite(sec) && sec > 0) return Math.min(sec * 1000 + 500, capMs);
+  }
+
+  // No hint: escalate 5s, 12s, 24s, … capped.
+  return Math.min(5000 * 2 ** (attempt - 1) + 1000, capMs);
 }
 
 // Single OpenAI-compatible client pointed at Qwen Model Studio.
@@ -78,10 +120,16 @@ export async function chat({
   temperature = 0.4,
   label = "qwen-call",
 }) {
-  const attempts = config.maxRetries + 1;
   let lastError;
+  // Two independent budgets: transient errors (timeout/upstream) get the small
+  // maxRetries budget; rate-limit (429) gets its own, larger budget since a
+  // multi-call /explain run routinely trips free-tier quotas and recovers once
+  // the window resets.
+  let transientLeft = config.maxRetries;
+  let rateLimitLeft = config.rateLimitMaxRetries;
+  let rateLimitAttempt = 0;
 
-  for (let attempt = 1; attempt <= attempts; attempt++) {
+  for (;;) {
     try {
       const response = await getClient().chat.completions.create(
         {
@@ -103,21 +151,39 @@ export async function chat({
       return content.trim();
     } catch (err) {
       lastError = err;
-      const isLast = attempt === attempts;
-      console.warn(
-        `[${label}] attempt ${attempt}/${attempts} failed: ${err?.message ?? err}`
-      );
-      // An auth failure won't fix itself on retry — fail fast and log loudly.
       const { kind } = classifyQwenError(err);
+      console.warn(`[${label}] attempt failed (${kind}): ${err?.message ?? err}`);
+
+      // An auth failure won't fix itself on retry — fail fast and log loudly.
       if (kind === "auth") {
         console.error(
-          `[${label}] AUTH ERROR from Qwen — check QWEN_API_KEY / QWEN_BASE_URL. ${err?.message ?? err}`
+          `[${label}] AUTH ERROR — check QWEN_API_KEY / QWEN_BASE_URL. ${err?.message ?? err}`
         );
         break;
       }
-      if (isLast) break;
-      // Short linear backoff before the single retry.
-      await sleep(750 * attempt);
+
+      // Rate-limit (429) and transient overload (503) both back off and retry
+      // out of the same generous budget, honoring any server-provided delay.
+      if (kind === "rate_limit" || kind === "overloaded") {
+        if (rateLimitLeft <= 0) break;
+        rateLimitLeft -= 1;
+        rateLimitAttempt += 1;
+        const delay = retryDelayMsFor(
+          err,
+          rateLimitAttempt,
+          config.rateLimitMaxDelayMs
+        );
+        console.warn(
+          `[${label}] ${kind} — waiting ${Math.round(delay / 1000)}s then retrying (${rateLimitLeft} retries left).`
+        );
+        await sleep(delay);
+        continue;
+      }
+
+      // timeout / upstream: small linear backoff.
+      if (transientLeft <= 0) break;
+      transientLeft -= 1;
+      await sleep(750 * (config.maxRetries - transientLeft));
     }
   }
 
@@ -125,9 +191,13 @@ export async function chat({
   const message = lastError?.message ?? String(lastError);
   const readable =
     kind === "timeout"
-      ? `Qwen call "${label}" timed out after ${config.timeoutMs}ms (${attempts} attempt(s)).`
+      ? `Qwen call "${label}" timed out after ${config.timeoutMs}ms.`
       : kind === "auth"
         ? `Qwen authentication failed for call "${label}". Check QWEN_API_KEY.`
-        : `Qwen call "${label}" failed after ${attempts} attempt(s): ${message}`;
+        : kind === "rate_limit"
+          ? `Qwen call "${label}" was rate limited (429) and did not recover after ${config.rateLimitMaxRetries} retries: ${message}`
+          : kind === "overloaded"
+            ? `Qwen call "${label}" hit a transient overload (503) and did not recover after ${config.rateLimitMaxRetries} retries: ${message}`
+            : `Qwen call "${label}" failed: ${message}`;
   throw new QwenError(readable, { statusCode, kind, cause: lastError });
 }
