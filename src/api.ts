@@ -75,12 +75,14 @@ export function backendMode(): "live" | "mock" {
 }
 
 // ---------------------------------------------------------------------
-// Chat — reuses Person 2's existing RAG endpoint on the explain service
-// (services/repo-explainer/src/rag.js), which already has a working
-// Qwen key server-side. No separate chat backend or API key needed:
-//   POST {VITE_EXPLAIN_URL}/chat   Body: { ...ingestion, question }
+// Chat — proxied through a Vercel serverless function (api/chat.ts) so
+// GEMINI_API_KEY never ships to the browser:
+//   POST {VITE_CHAT_URL}   Body: { context_type, question, ingestion }
 //   -> { answer: string, sources: string[] }
+// Pipeline /explain still uses VITE_EXPLAIN_URL (Person 2's Qwen service).
 // ---------------------------------------------------------------------
+
+const CHAT_URL = import.meta.env.VITE_CHAT_URL as string | undefined;
 
 export interface ChatAnswer {
   answer: string;
@@ -88,13 +90,11 @@ export interface ChatAnswer {
 }
 
 export function chatMode(): "live" | "mock" {
-  return EXPLAIN_URL ? "live" : "mock";
+  return CHAT_URL ? "live" : "mock";
 }
 
 // Synthetic "ingestion" payload for the tool-level FAQ assistant (no repo
 // has been processed yet, or the question isn't about a specific repo).
-// The RAG endpoint falls back to the readme when key_files is empty, so
-// this gets grounded, on-topic answers about the tool itself for free.
 export const TOOL_DOCS: IngestResult = {
   repo_url: "repo-to-video",
   file_tree: "",
@@ -127,16 +127,17 @@ export const TOOL_DOCS: IngestResult = {
 export async function askQuestion(
   ingestion: IngestResult,
   question: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  contextType: "repo" | "tool" = "repo"
 ): Promise<ChatAnswer> {
-  if (!EXPLAIN_URL) {
+  if (!CHAT_URL) {
     return mockAnswer(ingestion, question);
   }
 
-  const res = await fetch(`${EXPLAIN_URL}/chat`, {
+  const res = await fetch(CHAT_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...ingestion, question }),
+    body: JSON.stringify({ context_type: contextType, question, ingestion }),
     signal,
   });
 
@@ -163,8 +164,9 @@ function mockAnswer(ingestion: IngestResult, question: string): Promise<ChatAnsw
   const subject = ingestion === TOOL_DOCS ? "the tool" : ingestion.repo_url;
   return Promise.resolve({
     answer:
-      `Chat is in mock mode because \`VITE_EXPLAIN_URL\` isn't set. ` +
-      `Once the repo-explainer service is deployed, I'll answer about ${subject} using its \`/chat\` endpoint (Qwen + RAG over the actual files).\n\n` +
+      `Chat is in mock mode because \`VITE_CHAT_URL\` isn't set. ` +
+      `Deploy the Gemini proxy (api/chat.ts) to Vercel, set \`GEMINI_API_KEY\` server-side, ` +
+      `and point \`VITE_CHAT_URL\` at \`/api/chat\` — then I'll answer about ${subject} using Google Gemini.\n\n` +
       `You asked: "${question}"`,
     sources: [],
   });

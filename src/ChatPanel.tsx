@@ -13,6 +13,7 @@ interface ChatPanelProps {
   compact?: boolean;
   examples?: string[];
   hint?: string;
+  contextType?: "repo" | "tool";
 }
 
 export function ChatPanel({
@@ -21,6 +22,7 @@ export function ChatPanel({
   compact = false,
   examples = [],
   hint,
+  contextType = "repo",
 }: ChatPanelProps) {
   const [turns, setTurns] = useState<QaTurn[]>([]);
   const [input, setInput] = useState("");
@@ -50,7 +52,12 @@ export function ChatPanel({
     abortRef.current = controller;
 
     try {
-      const { answer, sources } = await askQuestion(ingestion, question, controller.signal);
+      const { answer, sources } = await askQuestion(
+        ingestion,
+        question,
+        controller.signal,
+        contextType
+      );
       setTurns((prev) => [...prev, { question, answer, sources }]);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -135,7 +142,7 @@ export function ChatPanel({
       </form>
 
       <p className="chat-mode">
-        {mode === "live" ? "● Qwen via repo-explainer" : "○ mock chat — set VITE_EXPLAIN_URL to enable"}
+        {mode === "live" ? "● Gemini" : "○ mock chat — set VITE_CHAT_URL to enable"}
       </p>
     </div>
   );

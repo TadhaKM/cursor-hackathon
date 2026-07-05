@@ -8,6 +8,7 @@ POST {VITE_INGEST_URL}/ingest    -> IngestResult
 POST {VITE_EXPLAIN_URL}/explain  -> ExplainResult
 POST {VITE_RENDER_URL}/render    -> kicks off async video jobs
 GET  {VITE_RENDER_URL}/render/:job_id  -> polled until ready/partial/failed
+POST {VITE_CHAT_URL}             -> { answer, sources }  (Gemini proxy)
 ```
 
 ## Run locally
@@ -26,7 +27,7 @@ testable right now, before any backend exists. A pill in the top bar shows
 
 ### Connecting to real backends
 
-Copy `.env.example` to `.env.local` and fill in the three URLs once your
+Copy `.env.example` to `.env.local` and fill in the three pipeline URLs once your
 teammates have something deployed:
 
 ```
@@ -47,27 +48,74 @@ live automatically.
   (ingest → explain → render), reflecting actual async state.
 - **Result** — one video per section with a sidebar to jump between them,
   architecture diagram image if provided, collapsible full summary
-  (rendered from markdown), and a Qwen-powered chat box for repo questions.
+  (rendered from markdown), and a Gemini-powered chat box for repo questions.
 - **Ask assistant** — floating `?` button on every page; answers tool questions
   globally, or repo questions after a walkthrough is ready.
 - **Error** — shows which stage failed and the raw error message, with retry.
 
-## Chat
+## Chat (Google Gemini)
 
-Both chat UIs (the result-page chat box and the floating `?` assistant) call
-Person 2's existing `POST {VITE_EXPLAIN_URL}/chat` endpoint in
-`services/repo-explainer` — no separate proxy, deployment, or API key needed
-on the frontend side. That service already chunks the ingested key files,
-retrieves the most relevant ones for the question, and answers with Qwen
-(keyed server-side via `QWEN_API_KEY`).
+Chat is **separate from the explain pipeline**. Person 2's `/explain` endpoint
+still uses Qwen via `VITE_EXPLAIN_URL`. Chat instead calls a Vercel serverless
+proxy (`api/chat.ts`) so `GEMINI_API_KEY` never ships to the browser.
 
-- On the results page, the real ingestion payload from `/ingest` is sent
-  along with each question, so answers are grounded in the actual repo files.
-- Before a repo's been processed (or for general tool questions via the `?`
-  button), a small built-in "tool docs" payload is sent instead, so the same
-  endpoint can answer FAQ-style questions about the tool itself.
-- If `VITE_EXPLAIN_URL` isn't set, chat runs in **mock mode** like the rest
-  of the pipeline — same pill pattern, no separate flag to manage.
+### 1. Get a Gemini API key
+
+Create a key at [Google AI Studio](https://aistudio.google.com/apikey).
+**Never commit the key** — add it only to `.env.local` (local) or the Vercel
+dashboard (production). Rotate the key if it was ever exposed in chat or logs.
+
+### 2. Deploy the proxy to Vercel
+
+From this folder:
+
+```
+npm install
+npx vercel link          # first time only
+npx vercel env add GEMINI_API_KEY
+npx vercel env add GEMINI_MODEL   # optional, default gemini-2.0-flash
+npx vercel env add ALLOWED_ORIGIN   # optional, e.g. your Render frontend URL
+npx vercel deploy --prod
+```
+
+Server env vars (Vercel dashboard or `.env.local` for `vercel dev`):
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `GEMINI_API_KEY` | yes | From AI Studio — **no `VITE_` prefix** |
+| `GEMINI_MODEL` | no | Default `gemini-2.0-flash` |
+| `ALLOWED_ORIGIN` | no | CORS allowlist for your frontend origin |
+
+### 3. Point the frontend at the proxy
+
+Set `VITE_CHAT_URL` in `.env.local` or Render:
+
+```
+# Local (run `npm run dev:api` in a second terminal)
+VITE_CHAT_URL=http://localhost:3000/api/chat
+
+# Production
+VITE_CHAT_URL=https://<your-vercel-project>.vercel.app/api/chat
+```
+
+Local dev with the proxy:
+
+```
+# Terminal 1 — Gemini proxy (reads GEMINI_API_KEY from .env.local)
+npm run dev:api
+
+# Terminal 2 — Vite frontend
+npm run dev
+```
+
+Both chat UIs (results-page chat and floating `?` assistant) POST to
+`VITE_CHAT_URL` with `{ context_type, question, ingestion }`:
+
+- **repo** — grounded in the ingested README, file tree, and top key files
+- **tool** — uses built-in tool docs for FAQ-style questions
+
+If `VITE_CHAT_URL` isn't set, chat runs in **mock mode** — same pill pattern
+(`● Gemini` vs `○ mock chat`), independent of pipeline mock/live mode.
 
 ## Also new: transcript, shortcuts, history, and export
 
@@ -92,7 +140,8 @@ retrieves the most relevant ones for the question, and answers with Qwen
 2. Build command: `npm install && npm run build`
 3. Publish directory: `dist`
 4. Set the three `VITE_*_URL` env vars in the Render dashboard once the
-   backend services are deployed. Leave unset to keep running in mock mode.
+   backend services are deployed. Set `VITE_CHAT_URL` to your Vercel proxy URL.
+   Leave pipeline URLs unset to keep running in mock mode.
 
 Each backend folder (`repo-ingest/`, `services/repo-explainer/`,
 `video-renderer/`) deploys as its own Render service — currently only

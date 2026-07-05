@@ -230,13 +230,14 @@ function AskBuilder({ repoIngestion, repoName }: { repoIngestion?: IngestResult;
             <ChatPanel
               compact
               ingestion={repoIngestion ?? TOOL_DOCS}
+              contextType={repoIngestion ? "repo" : "tool"}
               placeholder={
                 repoIngestion ? "Ask about this codebase…" : "Ask how repo → video works…"
               }
               hint={
                 repoIngestion
-                  ? "Powered by Qwen (via the repo-explainer service) — grounded in this repo's actual files."
-                  : "Powered by Qwen (via the repo-explainer service) — ask about the pipeline, timing, or limitations."
+                  ? "Powered by Gemini — grounded in this repo's actual files."
+                  : "Powered by Gemini — ask about the pipeline, timing, or limitations."
               }
               examples={
                 repoIngestion
@@ -562,7 +563,7 @@ const FAQ_ITEMS: { cat: FaqCategory; q: string; a: string }[] = [
   {
     cat: "chat",
     q: "Can I ask questions about the codebase afterward?",
-    a: "Yes — use the chat box under your walkthrough results, or the floating \"?\" button in the corner. Both call the same Qwen-powered RAG endpoint the explainer service exposes. On the results page they answer using the repo's actual files; elsewhere the \"?\" button answers general tool questions.",
+    a: "Yes — use the chat box under your walkthrough results, or the floating \"?\" button in the corner. Both call the same Gemini-powered chat proxy (VITE_CHAT_URL). On the results page they answer using the repo's actual files; elsewhere the \"?\" button answers general tool questions.",
   },
   {
     cat: "pipeline",
@@ -1459,7 +1460,7 @@ function ResultView({
         <ChatPanel
           ingestion={result.ingestion}
           placeholder="Ask a question about this codebase…"
-          hint="Powered by Qwen (via the repo-explainer service) — grounded in this repo's actual files."
+          hint="Powered by Gemini — grounded in this repo's actual files."
           examples={[
             "Why is auth separate from the API layer?",
             "What happens if the token expires?",
