@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { config, assertApiKey } from "./config.js";
 import { explainRepo } from "./explain.js";
+import { explainDiff } from "./diffExplain.js";
 import { answerQuestion } from "./rag.js";
 
 const app = express();
@@ -76,6 +77,41 @@ app.post("/explain", async (req, res) => {
     });
   } catch (err) {
     sendError(res, "/explain", err);
+  }
+});
+
+// Diff mode: narrate what changed between two refs instead of a full repo
+// snapshot. Body: repo-ingest's POST /diff response, optionally + persona.
+app.post("/explain-diff", async (req, res) => {
+  try {
+    assertApiKey();
+  } catch (err) {
+    return res.status(500).json({ error: err.message, kind: "config" });
+  }
+
+  const body = req.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return res.status(400).json({
+      error: "Request body must be a JSON object with the diff fields (files, commits, base_ref, head_ref).",
+      kind: "bad_request",
+    });
+  }
+
+  const started = Date.now();
+  try {
+    const result = await explainDiff(body, { persona: body.persona });
+    res.json({
+      narration_script: result.narration_script,
+      meta: {
+        persona: result.persona,
+        model: config.model,
+        elapsed_ms: Date.now() - started,
+        base_ref: body.base_ref,
+        head_ref: body.head_ref,
+      },
+    });
+  } catch (err) {
+    sendError(res, "/explain-diff", err);
   }
 });
 
