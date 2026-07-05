@@ -1,0 +1,162 @@
+// Netlify Function port of the chat proxy (api/chat.ts is Vercel-only).
+// Grounds answers in the repo's ingested files (TF-IDF over key files) and
+// calls Google Gemini. Uses only Node built-ins (native fetch) — no deps.
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+const MAX_CONTEXT_CHARS = 48_000;
+const TOP_FILES = 6;
+const MAX_FILE_CHARS = 8_000;
+
+const STOPWORDS = new Set(
+  "the a an and or of to in is are be for on with as at by from this that it its into how what where why when does do can i you we they will would should could".split(
+    " "
+  )
+);
+
+function tokenize(text) {
+  return (String(text).toLowerCase().match(/[a-z0-9_]+/g) ?? []).filter(
+    (t) => t.length > 1 && !STOPWORDS.has(t)
+  );
+}
+
+function scoreFile(content, qTokens) {
+  let score = 0;
+  for (const t of tokenize(content)) if (qTokens.has(t)) score += 1;
+  return score;
+}
+
+function selectKeyFiles(files, question) {
+  if (!files || files.length === 0) return [];
+  const q = new Set(tokenize(question));
+  return [...files]
+    .map((f) => ({ file: f, score: scoreFile(f.content ?? "", q) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, TOP_FILES)
+    .map(({ file }) => ({
+      path: file.path,
+      content: String(file.content ?? "").slice(0, MAX_FILE_CHARS),
+    }));
+}
+
+function buildRepoContext(ing, question) {
+  const parts = [];
+  const sources = [];
+  parts.push(`Repository: ${ing.repo_url}`);
+  if (ing.readme) parts.push(`## README\n${String(ing.readme).slice(0, 12_000)}`);
+  if (ing.file_tree)
+    parts.push(`## File tree\n${String(ing.file_tree).slice(0, 6_000)}`);
+  if (ing.package_manifest)
+    parts.push(
+      `## Package manifest\n${String(ing.package_manifest).slice(0, 4_000)}`
+    );
+  if (Array.isArray(ing.recent_commits) && ing.recent_commits.length) {
+    const commits = ing.recent_commits
+      .slice(0, 8)
+      .map((c) => `- ${c.date}: ${c.message}`)
+      .join("\n");
+    parts.push(`## Recent commits\n${commits}`);
+  }
+  for (const file of selectKeyFiles(ing.key_files ?? [], question)) {
+    parts.push(`## File: ${file.path}\n${file.content}`);
+    sources.push(file.path);
+  }
+  let text = parts.join("\n\n");
+  if (text.length > MAX_CONTEXT_CHARS)
+    text = text.slice(0, MAX_CONTEXT_CHARS) + "\n\n[context truncated]";
+  return { text, sources };
+}
+
+function buildToolContext(ing) {
+  return {
+    text: String(ing.readme ?? "").slice(0, MAX_CONTEXT_CHARS),
+    sources: ["tool-docs"],
+  };
+}
+
+function systemPrompt(contextType) {
+  if (contextType === "tool") {
+    return [
+      "You are a helpful assistant for the Redio onboarding tool.",
+      "Answer questions about how the tool works using ONLY the documentation provided.",
+      "Be concise, accurate, and friendly. If the docs do not cover something, say so.",
+      "Do not invent features or backend details not mentioned in the docs.",
+    ].join(" ");
+  }
+  return [
+    "You are a senior engineer helping a new teammate understand a codebase.",
+    "Answer questions using ONLY the repository context provided (README, file tree, key files, manifest, commits).",
+    "Reference specific file paths when relevant. Be concise and practical.",
+    "If the context does not contain enough information, say what is missing rather than guessing.",
+  ].join(" ");
+}
+
+async function callGemini(system, userPrompt) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.error?.message ?? `Gemini API error (${res.status})`);
+  }
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Gemini returned an empty response");
+  return text.trim();
+}
+
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Content-Type": "application/json",
+};
+
+const json = (statusCode, obj) => ({
+  statusCode,
+  headers: CORS,
+  body: JSON.stringify(obj),
+});
+
+exports.handler = async (event) => {
+  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: CORS, body: "" };
+  if (event.httpMethod !== "POST") return json(405, { error: "Method not allowed" });
+  if (!GEMINI_API_KEY)
+    return json(500, { error: "GEMINI_API_KEY is not configured on the server" });
+
+  let body;
+  try {
+    body = JSON.parse(event.body || "{}");
+  } catch {
+    return json(400, { error: "Request body must be valid JSON" });
+  }
+
+  const { context_type, question, ingestion } = body;
+  if (context_type !== "repo" && context_type !== "tool")
+    return json(400, { error: "context_type must be 'repo' or 'tool'" });
+  if (!question || typeof question !== "string" || !question.trim())
+    return json(400, { error: "question is required" });
+  if (!ingestion || typeof ingestion !== "object")
+    return json(400, { error: "ingestion is required" });
+
+  try {
+    const { text: context, sources } =
+      context_type === "tool"
+        ? buildToolContext(ingestion)
+        : buildRepoContext(ingestion, question.trim());
+    const answer = await callGemini(
+      systemPrompt(context_type),
+      `Context:\n${context}\n\nQuestion: ${question.trim()}`
+    );
+    return json(200, { answer, sources });
+  } catch (err) {
+    return json(502, { error: err?.message ?? "Chat request failed" });
+  }
+};
