@@ -15,6 +15,10 @@ export const config = {
   port: int(process.env.PORT, 8787),
   // 1 retry means 2 total attempts per Qwen call.
   maxRetries: int(process.env.QWEN_MAX_RETRIES, 1),
+  // Per-section narration resize makes ONE extra LLM call per out-of-range
+  // section (up to N more calls per /explain). Off by default to conserve
+  // rate-limited free-tier quota; set REFINE_NARRATION=true to re-enable.
+  refineNarration: (process.env.REFINE_NARRATION ?? "false").toLowerCase() === "true",
 };
 
 export function assertApiKey() {

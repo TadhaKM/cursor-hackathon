@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { askQuestion, chatMode, type IngestResult } from "./api";
+import {
+  askQuestion,
+  ChatHttpError,
+  chatBackend,
+  chatMode,
+  type ChatBackendPreference,
+  type IngestResult,
+} from "./api";
 
 interface QaTurn {
   question: string;
@@ -11,23 +18,47 @@ interface ChatPanelProps {
   ingestion: IngestResult;
   placeholder: string;
   compact?: boolean;
+  collapsible?: boolean;
+  collapsibleLabel?: string;
   examples?: string[];
   hint?: string;
   contextType?: "repo" | "tool";
+  backend?: ChatBackendPreference;
+}
+
+function friendlyChatError(err: unknown): string {
+  if (err instanceof ChatHttpError) {
+    if (err.status === 404) {
+      return "Process a repo first to enable chat.";
+    }
+    return err.message;
+  }
+  if (err instanceof Error) {
+    if (/failed to fetch|can't reach|network/i.test(err.message)) {
+      return "Can't reach the chat service — check your connection or backend URL.";
+    }
+    return err.message;
+  }
+  return "Something went wrong";
 }
 
 export function ChatPanel({
   ingestion,
   placeholder,
   compact = false,
+  collapsible = false,
+  collapsibleLabel = "Ask a question about this codebase.",
   examples = [],
   hint,
   contextType = "repo",
+  backend = "auto",
 }: ChatPanelProps) {
+  const [open, setOpen] = useState(!collapsible);
   const [turns, setTurns] = useState<QaTurn[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [activeSource, setActiveSource] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -52,16 +83,18 @@ export function ChatPanel({
     abortRef.current = controller;
 
     try {
+      const history = turns.map((t) => ({ question: t.question, answer: t.answer }));
       const { answer, sources } = await askQuestion(
         ingestion,
         question,
         controller.signal,
-        contextType
+        contextType,
+        { history, backend }
       );
       setTurns((prev) => [...prev, { question, answer, sources }]);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError(friendlyChatError(err));
       setInput(question);
     } finally {
       setLoading(false);
@@ -70,8 +103,8 @@ export function ChatPanel({
 
   const mode = chatMode();
 
-  return (
-    <div className={`chat-panel ${compact ? "chat-panel-compact" : ""}`}>
+  const panelBody = (
+    <>
       {hint && <p className="chat-hint">{hint}</p>}
 
       {examples.length > 0 && turns.length === 0 && (
@@ -92,24 +125,44 @@ export function ChatPanel({
 
       {turns.length > 0 && (
         <div className="chat-messages" ref={scrollRef}>
-          {turns.map((turn, i) => (
-            <div key={i} className="chat-turn">
-              <div className="chat-bubble chat-bubble-user">{turn.question}</div>
-              <div className="chat-bubble chat-bubble-assistant">
-                {turn.answer}
-                {turn.sources.length > 0 && (
-                  <div className="chat-sources">
-                    {turn.sources.map((s) => (
-                      <span className="chat-source" key={s}>
-                        {s}
-                      </span>
-                    ))}
-                  </div>
-                )}
+          {turns.map((turn, i) => {
+            const isLatest = i === turns.length - 1;
+            const enterClass = isLatest ? " chat-bubble-enter" : "";
+            return (
+              <div key={i} className="chat-turn">
+                <div className={`chat-bubble chat-bubble-user${enterClass}`}>{turn.question}</div>
+                <div className={`chat-bubble chat-bubble-assistant${enterClass}`}>
+                  {turn.answer}
+                  {turn.sources.length > 0 && (
+                    <div className="chat-sources">
+                      {turn.sources.map((s) => (
+                        <button
+                          type="button"
+                          className={`chat-source ${activeSource === s ? "chat-source-active" : ""}`}
+                          key={s}
+                          title={s}
+                          aria-label={`Source file: ${s}`}
+                          onClick={() => setActiveSource((prev) => (prev === s ? null : s))}
+                        >
+                          {s.split("#")[0]}
+                          {activeSource === s && (
+                            <span className="chat-source-tooltip" role="tooltip">
+                              {s}
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
+            );
+          })}
+          {loading && (
+            <div className="chat-bubble chat-bubble-assistant chat-typing chat-bubble-enter">
+              Thinking…
             </div>
-          ))}
-          {loading && <div className="chat-bubble chat-bubble-assistant chat-typing">Thinking…</div>}
+          )}
         </div>
       )}
 
@@ -142,8 +195,39 @@ export function ChatPanel({
       </form>
 
       <p className="chat-mode">
-        {mode === "live" ? "● Gemini" : "○ mock chat — set VITE_CHAT_URL to enable"}
+        {mode === "live"
+          ? backend === "explain" || (backend === "auto" && chatBackend() === "qwen")
+            ? "● Qwen (Person 2 RAG)"
+            : chatBackend() === "gemini"
+              ? "● Gemini"
+              : "● Qwen (Person 2 RAG)"
+          : "○ mock chat"}
       </p>
-    </div>
+    </>
+  );
+
+  if (collapsible) {
+    return (
+      <div className={`chat-panel chat-panel-collapsible ${compact ? "chat-panel-compact" : ""}`}>
+        <button
+          type="button"
+          className="chat-collapsible-toggle"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+        >
+          <span className={`chat-collapsible-caret ${open ? "chat-collapsible-caret-open" : ""}`}>
+            ▸
+          </span>
+          {collapsibleLabel}
+        </button>
+        <div className={`collapsible ${open ? "collapsible-open" : ""}`}>
+          <div className="collapsible-inner chat-collapsible-body">{panelBody}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`chat-panel ${compact ? "chat-panel-compact" : ""}`}>{panelBody}</div>
   );
 }

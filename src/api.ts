@@ -63,6 +63,12 @@ export interface RenderResult {
   diagram_image_url?: string | null;
 }
 
+export interface DiagramHighlight {
+  section_index: number;
+  node_id: string;
+  caption?: string;
+}
+
 export interface PipelineResult {
   repo: string;
   architectureSummary: string;
@@ -72,7 +78,59 @@ export interface PipelineResult {
   // Raw mermaid source (not the rendered PNG) — needed to render the
   // diagram client-side so individual nodes can be highlighted per section.
   mermaidDiagram: string | null;
+  // Backend-provided node highlights (from repo-explainer's per-section
+  // node_ids, see ExplainSection) — takes priority over DiagramPanel's
+  // client-side title-matching heuristic in resolveDiagramHighlights()
+  // when present, since this is grounded in the actual narration script
+  // rather than a label-text guess.
+  diagramHighlights?: DiagramHighlight[];
   ingestion: IngestResult;
+}
+
+// ---------------------------------------------------------------------
+// Diff mode — narrate what changed between two refs instead of a full repo
+// walkthrough:
+//   POST {INGEST}/diff          -> DiffResult
+//   POST {EXPLAIN}/explain-diff -> ExplainDiffResult (always exactly 1 section)
+//   POST {RENDER}/render        -> same render/poll path as the main pipeline
+// ---------------------------------------------------------------------
+
+export interface DiffFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string;
+}
+
+export interface DiffResult {
+  repo_url: string;
+  base_ref: string;
+  head_ref: string;
+  total_commits: number;
+  commits: { message: string; date: string }[];
+  files: DiffFile[];
+  meta: {
+    owner: string;
+    repo: string;
+    total_files_changed: number;
+    files_included: number;
+    truncated: boolean;
+  };
+}
+
+export interface ExplainDiffResult {
+  narration_script: { sections: ExplainSection[] };
+}
+
+export interface DiffPipelineResult {
+  repo: string;
+  baseRef: string;
+  headRef: string;
+  section: ExplainSection;
+  video: VideoSection;
+  filesChanged: number;
+  totalFilesChanged: number;
 }
 
 const INGEST_URL = import.meta.env.VITE_INGEST_URL as string | undefined;
@@ -100,8 +158,31 @@ export interface ChatAnswer {
   sources: string[];
 }
 
+export interface ChatTurn {
+  question: string;
+  answer: string;
+}
+
+export type ChatBackendPreference = "auto" | "explain" | "gemini";
+
+export class ChatHttpError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ChatHttpError";
+    this.status = status;
+  }
+}
+
 export function chatMode(): "live" | "mock" {
-  return CHAT_URL ? "live" : "mock";
+  return CHAT_URL || EXPLAIN_URL ? "live" : "mock";
+}
+
+export function chatBackend(): "gemini" | "qwen" | "mock" {
+  if (CHAT_URL) return "gemini";
+  if (EXPLAIN_URL) return "qwen";
+  return "mock";
 }
 
 // Synthetic "ingestion" payload for the tool-level FAQ assistant (no repo
@@ -135,23 +216,15 @@ export const TOOL_DOCS: IngestResult = {
   package_manifest: "",
 };
 
-export async function askQuestion(
-  ingestion: IngestResult,
-  question: string,
-  signal?: AbortSignal,
-  contextType: "repo" | "tool" = "repo"
-): Promise<ChatAnswer> {
-  if (!CHAT_URL) {
-    return mockAnswer(ingestion, question);
-  }
+function buildQuestionWithHistory(question: string, history: ChatTurn[]): string {
+  if (history.length === 0) return question;
+  const prior = history
+    .map((t) => `User: ${t.question}\nAssistant: ${t.answer}`)
+    .join("\n\n");
+  return `Prior conversation:\n${prior}\n\nFollow-up question: ${question}`;
+}
 
-  const res = await fetch(CHAT_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ context_type: contextType, question, ingestion }),
-    signal,
-  });
-
+async function parseChatResponse(res: Response): Promise<ChatAnswer> {
   if (!res.ok) {
     const text = await safeText(res);
     let detail = text;
@@ -161,7 +234,7 @@ export async function askQuestion(
     } catch {
       // keep raw text
     }
-    throw new Error(detail || `Chat request failed (${res.status})`);
+    throw new ChatHttpError(detail || `Chat request failed (${res.status})`, res.status);
   }
 
   const data = (await res.json()) as { answer?: string; sources?: string[] };
@@ -171,16 +244,79 @@ export async function askQuestion(
   return { answer: data.answer, sources: data.sources ?? [] };
 }
 
-function mockAnswer(ingestion: IngestResult, question: string): Promise<ChatAnswer> {
-  const subject = ingestion === TOOL_DOCS ? "the tool" : ingestion.repo_url;
+export async function askQuestion(
+  ingestion: IngestResult,
+  question: string,
+  signal?: AbortSignal,
+  contextType: "repo" | "tool" = "repo",
+  options?: { history?: ChatTurn[]; backend?: ChatBackendPreference }
+): Promise<ChatAnswer> {
+  const history = options?.history ?? [];
+  const backend = options?.backend ?? "auto";
+  const enrichedQuestion = buildQuestionWithHistory(question, history);
+
+  // Result-screen repo chat prefers Person 2's /chat when EXPLAIN_URL is set.
+  if (backend === "explain" && EXPLAIN_URL && contextType === "repo") {
+    const res = await fetch(`${EXPLAIN_URL}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...ingestion, question: enrichedQuestion }),
+      signal,
+    });
+    return parseChatResponse(res);
+  }
+
+  if (backend !== "explain" && CHAT_URL) {
+    const res = await fetch(CHAT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        context_type: contextType,
+        question: enrichedQuestion,
+        ingestion,
+      }),
+      signal,
+    });
+    return parseChatResponse(res);
+  }
+
+  // Person 2's RAG chat — same ingestion payload, Qwen + TF-IDF over key files
+  if (EXPLAIN_URL && contextType === "repo") {
+    const res = await fetch(`${EXPLAIN_URL}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...ingestion, question: enrichedQuestion }),
+      signal,
+    });
+    return parseChatResponse(res);
+  }
+
+  return mockAnswer(ingestion, question);
+}
+
+function mockAnswer(_ingestion: IngestResult, question: string): Promise<ChatAnswer> {
   return Promise.resolve({
     answer:
-      `Chat is in mock mode because \`VITE_CHAT_URL\` isn't set. ` +
-      `Deploy the Gemini proxy (api/chat.ts) to Vercel, set \`GEMINI_API_KEY\` server-side, ` +
-      `and point \`VITE_CHAT_URL\` at \`/api/chat\` — then I'll answer about ${subject} using Google Gemini.\n\n` +
+      `Chat is in mock mode — set \`VITE_EXPLAIN_URL\` (Person 2's Qwen RAG) or \`VITE_CHAT_URL\` (Gemini proxy).\n\n` +
       `You asked: "${question}"`,
     sources: [],
   });
+}
+
+// Bridges repo-explainer's per-section node_ids (grounded in the actual
+// narration, via a dedicated Qwen/Gemini call) into DiagramPanel's
+// DiagramHighlight[] shape, which otherwise only ever gets populated by
+// resolveDiagramHighlights()'s client-side title-matching heuristic.
+// DiagramHighlight is one node per section; a section with multiple
+// node_ids just contributes its first (the primary node it discusses).
+function sectionsToDiagramHighlights(sections: ExplainSection[]): DiagramHighlight[] {
+  const highlights: DiagramHighlight[] = [];
+  sections.forEach((s, i) => {
+    const nodeId = s.node_ids?.[0];
+    if (!nodeId) return;
+    highlights.push({ section_index: i, node_id: nodeId, caption: s.caption ?? s.title });
+  });
+  return highlights;
 }
 
 export async function runPipeline(
@@ -235,7 +371,68 @@ export async function runPipeline(
     videos: final.videos,
     diagramImageUrl: final.diagram_image_url ?? null,
     mermaidDiagram: explainRes.mermaid_diagram,
+    diagramHighlights: sectionsToDiagramHighlights(explainRes.narration_script.sections),
     ingestion: ingestRes,
+  };
+}
+
+export async function runDiffPipeline(
+  repoUrl: string,
+  baseRef: string,
+  headRef: string,
+  onStage: (e: StageEvent) => void,
+  signal?: AbortSignal
+): Promise<DiffPipelineResult> {
+  if (!USING_REAL_BACKEND) {
+    return runMockDiffPipeline(repoUrl, baseRef, headRef, onStage, signal);
+  }
+
+  // 1. Diff — reuses the "ingest" stage slot, same UI progress step.
+  const diffRes = await postJSON<DiffResult>(
+    `${INGEST_URL}/diff`,
+    { repo_url: repoUrl, base_ref: baseRef, head_ref: headRef },
+    signal
+  );
+  onStage({ stage: "ingest", ok: true });
+
+  // 2. Explain the diff — always exactly one section (see diffExplain.js).
+  const explainRes = await postJSON<ExplainDiffResult>(
+    `${EXPLAIN_URL}/explain-diff`,
+    diffRes,
+    signal
+  );
+  onStage({ stage: "explain", ok: true });
+
+  const section = explainRes.narration_script.sections[0];
+  if (!section) {
+    onStage({ stage: "explain", ok: false });
+    throw new Error("Diff narration returned no section");
+  }
+
+  // 3. Render — same single render/poll path as the main pipeline, just one
+  // section and no diagram.
+  const kickoff = await postJSON<RenderResult>(
+    `${RENDER_URL}/render`,
+    { sections: [section] },
+    signal
+  );
+
+  const final = await pollRender(kickoff, signal);
+
+  if (final.status === "failed" || !final.videos[0]) {
+    onStage({ stage: "render", ok: false });
+    throw new Error("Video rendering failed");
+  }
+  onStage({ stage: "render", ok: true });
+
+  return {
+    repo: repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || repoUrl,
+    baseRef,
+    headRef,
+    section,
+    video: final.videos[0],
+    filesChanged: diffRes.meta.files_included,
+    totalFilesChanged: diffRes.meta.total_files_changed,
   };
 }
 
@@ -271,12 +468,28 @@ async function pollRender(
 }
 
 async function postJSON<T>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    const origin = (() => {
+      try {
+        return new URL(url).origin;
+      } catch {
+        return url;
+      }
+    })();
+    throw new Error(
+      `Can't reach ${origin} — the backend isn't running or blocked the request. ` +
+        `For local demo without services, remove VITE_INGEST_URL / VITE_EXPLAIN_URL / VITE_RENDER_URL from .env.local (mock mode).`
+    );
+  }
   if (!res.ok) {
     const text = await safeText(res);
     throw new Error(`${url} -> ${res.status}${text ? `: ${text}` : ""}`);
@@ -285,7 +498,13 @@ async function postJSON<T>(url: string, body: unknown, signal?: AbortSignal): Pr
 }
 
 async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { signal });
+  let res: Response;
+  try {
+    res = await fetch(url, { signal });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    throw new Error(`Can't reach the render service — is it running on ${RENDER_URL}?`);
+  }
   if (!res.ok) {
     const text = await safeText(res);
     throw new Error(`${url} -> ${res.status}${text ? `: ${text}` : ""}`);
@@ -357,14 +576,57 @@ async function runMockPipeline(
       status: "completed" as const,
     })),
     diagramImageUrl: null,
+    // MOCK_MERMAID_DIAGRAM's node lettering (A-E) matches MOCK_SECTIONS'
+    // node_ids above — keep them in sync if either changes.
     mermaidDiagram: MOCK_MERMAID_DIAGRAM,
+    diagramHighlights: sectionsToDiagramHighlights(MOCK_SECTIONS),
     ingestion: {
       repo_url: name,
-      file_tree: "src/\n  index.js\n  routes/\n  services/auth.js\npackage.json\nREADME.md",
+      file_tree:
+        "src/\n  index.js\n  routes/\n  services/auth.js\npackage.json\nREADME.md\n.github/workflows/ci.yml\ntests/\n  auth.test.js",
       readme: `# ${name}\n\nMock ingestion data — no real repo was read since the backend isn't configured.`,
       key_files: [],
-      recent_commits: [],
-      package_manifest: "",
+      recent_commits: [{ message: "fix auth middleware", date: new Date().toISOString() }],
+      package_manifest: '{"dependencies":{"express":"^4.18.0","react":"^19.0.0"}}',
     },
+  };
+}
+
+async function runMockDiffPipeline(
+  repoUrl: string,
+  baseRef: string,
+  headRef: string,
+  onStage: (e: StageEvent) => void,
+  signal?: AbortSignal
+): Promise<DiffPipelineResult> {
+  await wait(1000, signal);
+  onStage({ stage: "ingest", ok: true });
+
+  await wait(1500, signal);
+  onStage({ stage: "explain", ok: true });
+
+  await wait(2000, signal);
+  onStage({ stage: "render", ok: true });
+
+  const name = repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || "example/demo-repo";
+  const section: ExplainSection = {
+    title: "What Changed",
+    script:
+      `This is a mock diff narration, shown because no backend URLs are configured yet. Between ${baseRef} and ${headRef}, ` +
+      `a handful of files changed. In a real run, this would call out actual behavior changes and why they likely matter to someone coming back to this code after time away — not just a list of files.`,
+  };
+
+  return {
+    repo: name,
+    baseRef,
+    headRef,
+    section,
+    video: {
+      title: section.title,
+      video_url: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+      status: "completed",
+    },
+    filesChanged: 3,
+    totalFilesChanged: 3,
   };
 }

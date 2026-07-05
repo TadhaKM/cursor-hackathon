@@ -71,6 +71,20 @@ function sleep(ms) {
  * @param {string} [opts.label]       Human label used in error messages/logs.
  * @returns {Promise<string>} The assistant message content.
  */
+// How long to wait after a 429 before retrying. Prefer the provider's
+// Retry-After / "retry in Ns" hint; otherwise assume the per-minute quota
+// bucket. Capped so a single call can't hang too long.
+function rateLimitDelayMs(err) {
+  const header = err?.response?.headers?.get?.("retry-after");
+  let seconds = header ? Number(header) : NaN;
+  if (!Number.isFinite(seconds)) {
+    const m = String(err?.message ?? "").match(/retry in ([\d.]+)\s*s/i);
+    if (m) seconds = Number(m[1]);
+  }
+  if (!Number.isFinite(seconds)) seconds = 30; // default: wait out the minute
+  return Math.min(Math.max(seconds, 5), 35) * 1000 + 500;
+}
+
 export async function chat({
   system,
   user,
@@ -80,8 +94,14 @@ export async function chat({
 }) {
   const attempts = config.maxRetries + 1;
   let lastError;
+  // 429s (free-tier rate limits) get their own, larger retry budget — the
+  // bucket refills every minute, so waiting is the right move.
+  let rateLimitRetries = 0;
+  const maxRateLimitRetries = 2;
 
-  for (let attempt = 1; attempt <= attempts; attempt++) {
+  let attempt = 0;
+  while (true) {
+    attempt++;
     try {
       const response = await getClient().chat.completions.create(
         {
@@ -103,20 +123,35 @@ export async function chat({
       return content.trim();
     } catch (err) {
       lastError = err;
-      const isLast = attempt === attempts;
-      console.warn(
-        `[${label}] attempt ${attempt}/${attempts} failed: ${err?.message ?? err}`
-      );
-      // An auth failure won't fix itself on retry — fail fast and log loudly.
+      const status = err?.status ?? err?.response?.status;
       const { kind } = classifyQwenError(err);
+
+      // An auth failure won't fix itself on retry — fail fast and log loudly.
       if (kind === "auth") {
         console.error(
           `[${label}] AUTH ERROR from Qwen — check QWEN_API_KEY / QWEN_BASE_URL. ${err?.message ?? err}`
         );
         break;
       }
-      if (isLast) break;
-      // Short linear backoff before the single retry.
+
+      // Rate limited: wait for the quota bucket to refill, then retry.
+      if (status === 429 && rateLimitRetries < maxRateLimitRetries) {
+        rateLimitRetries++;
+        const waitMs = rateLimitDelayMs(err);
+        console.warn(
+          `[${label}] rate limited (429) — waiting ${Math.round(
+            waitMs / 1000
+          )}s then retrying (${rateLimitRetries}/${maxRateLimitRetries})…`
+        );
+        await sleep(waitMs);
+        continue;
+      }
+
+      console.warn(
+        `[${label}] attempt ${attempt} failed: ${err?.message ?? err}`
+      );
+      if (attempt >= attempts) break;
+      // Short linear backoff before the single generic retry.
       await sleep(750 * attempt);
     }
   }

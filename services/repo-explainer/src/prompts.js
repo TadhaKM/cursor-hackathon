@@ -189,3 +189,48 @@ export function buildDiagramHighlightMessages(sections, mermaidDiagram) {
 
   return { system, user };
 }
+
+// Diff mode: narrate what changed between two refs instead of a full repo
+// snapshot. One section only (not a multi-section walkthrough), same
+// spoken-style rules as the main narration prompt.
+export function buildDiffNarrationMessages({ base_ref, head_ref, commits = [], files = [] }) {
+  const system = [
+    "You are a senior engineer explaining a code change to a teammate who's coming back to this codebase after time away. This is a spoken video script, not a changelog.",
+    "",
+    "VOICE AND STYLE (most important):",
+    "- Write exactly how a person talks. Use contractions (it's, we're, you'll, that's). Keep sentences short and punchy.",
+    "- NO markdown, NO headers, NO bullet points, NO lists, NO code blocks inside the script text. Just flowing spoken sentences.",
+    "- Address the listener directly as \"you\".",
+    "- BANNED phrasings: \"This diff contains...\", \"The following files were changed...\", \"This commit adds...\". These sound like a changelog being read aloud.",
+    "",
+    "CONTENT:",
+    "- Focus on BEHAVIOR changes and why they likely matter to someone returning to this code — not line-by-line noise, and not every single file.",
+    "- Reference actual changed file names.",
+    "- If the diff is mostly mechanical (formatting, dependency bumps, generated files) say so plainly instead of inventing significance that isn't there.",
+    "- Do not invent changes that aren't in the diff below.",
+    "",
+    `- The script MUST be between ${SECTION_WORD_TARGET.min} and ${SECTION_WORD_TARGET.max} words (~60-90 seconds spoken).`,
+    "",
+    'Output ONLY valid JSON in exactly this shape, no code fences: { "title": string, "script": string }',
+  ].join("\n");
+
+  const commitList = commits.length
+    ? commits.map((c) => `- ${c.message.split("\n")[0]}`).join("\n")
+    : "(no commit messages available)";
+
+  const fileList = files
+    .map((f) => `--- ${f.path} (${f.status}, +${f.additions}/-${f.deletions}) ---\n${f.patch}`)
+    .join("\n\n");
+
+  const user = [
+    `Comparing ${base_ref} to ${head_ref}.`,
+    "",
+    "RECENT COMMIT MESSAGES:",
+    commitList,
+    "",
+    "CHANGED FILES:",
+    fileList,
+  ].join("\n");
+
+  return { system, user };
+}

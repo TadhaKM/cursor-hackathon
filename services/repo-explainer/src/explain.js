@@ -1,4 +1,5 @@
 import { chat } from "./qwenClient.js";
+import { config } from "./config.js";
 import { normalizeIngestion, renderContext, hasUsableContent } from "./ingestion.js";
 import {
   buildArchitectureMessages,
@@ -180,10 +181,14 @@ export async function explainRepo(payload = {}, opts = {}) {
   });
   const narrationScript = parseNarration(narrationRaw);
   // Enforce per-section word bounds with one targeted resize retry each.
-  narrationScript.sections = await refineSectionLengths(
-    narrationScript.sections,
-    persona
-  );
+  // Skipped by default (config.refineNarration) since each resize is an extra
+  // rate-limited LLM call; sections are still hard-capped downstream.
+  if (config.refineNarration) {
+    narrationScript.sections = await refineSectionLengths(
+      narrationScript.sections,
+      persona
+    );
+  }
 
   // 3) Mermaid diagram (best-effort; may be null).
   const mermaidDiagram = includeDiagram

@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { marked } from "marked";
-import mermaid from "mermaid";
 import {
   runPipeline,
+  runDiffPipeline,
   backendMode,
+  chatBackend,
   TOOL_DOCS,
   type StageId,
   type PipelineResult,
+  type DiffPipelineResult,
   type Persona,
   type IngestResult,
 } from "./api";
 import { ChatPanel } from "./ChatPanel";
+import { DiagramPanel } from "./DiagramPanel";
+import { RepoScorecard, computeScorecard } from "./RepoScorecard.tsx";
+import { resolveDiagramHighlights } from "./diagramHighlights";
 import { useToast } from "./Toast";
 import {
   loadHistory,
@@ -23,7 +28,7 @@ import {
 } from "./history";
 import "./App.css";
 
-type ViewState = "input" | "progress" | "result" | "error";
+type ViewState = "input" | "progress" | "result" | "diff-result" | "error";
 type Page = "app" | "about" | "faq" | "changelog";
 
 const PIPELINE_STEPS = ["Ingest repo", "Explain architecture", "Render videos"];
@@ -140,6 +145,7 @@ const STEP_LABELS: Record<ViewState, string> = {
   input: "Step 1 · Paste a repo",
   progress: "Step 2 · Building",
   result: "Step 3 · Walkthrough ready",
+  "diff-result": "Step 3 · Diff explained",
   error: "Something went wrong",
 };
 
@@ -214,6 +220,22 @@ function FeatureShowcase() {
   );
 }
 
+
+function chatHint(hasRepo: boolean): string {
+  const backend = chatBackend();
+  if (backend === "gemini") {
+    return hasRepo
+      ? "Powered by Gemini — grounded in this repo's actual files."
+      : "Powered by Gemini — ask about the pipeline, timing, or limitations.";
+  }
+  if (backend === "qwen" && hasRepo) {
+    return "Powered by Qwen RAG — grounded in this repo's key files.";
+  }
+  return hasRepo
+    ? "Mock chat — set VITE_EXPLAIN_URL (Qwen) or VITE_CHAT_URL (Gemini)."
+    : "Mock chat for tool FAQ — set VITE_CHAT_URL for Gemini answers.";
+}
+
 function AskBuilder({ repoIngestion, repoName }: { repoIngestion?: IngestResult; repoName?: string }) {
   const [open, setOpen] = useState(false);
 
@@ -235,19 +257,7 @@ function AskBuilder({ repoIngestion, repoName }: { repoIngestion?: IngestResult;
               placeholder={
                 repoIngestion ? "Ask about this codebase…" : "Ask how repo → video works…"
               }
-              hint={
-                repoIngestion
-                  ? "Powered by Gemini — grounded in this repo's actual files."
-                  : "Powered by Gemini — ask about the pipeline, timing, or limitations."
-              }
-              examples={
-                repoIngestion
-                  ? [
-                      "Why is auth separate from the API layer?",
-                      "What should I read first in this repo?",
-                    ]
-                  : ["How long does a render take?", "Does it work on private repos?"]
-              }
+              hint={chatHint(!!repoIngestion)}
             />
           </div>
         </div>
@@ -867,6 +877,15 @@ function App() {
   const [failedStage, setFailedStage] = useState<StageId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [result, setResult] = useState<PipelineResult | null>(null);
+  // Diff mode — explain what changed between two refs instead of a full
+  // repo walkthrough. Deliberately kept separate from the main result/
+  // history machinery above: diff results are always exactly one section,
+  // so they don't need the section sidebar, keyboard shortcuts, or
+  // walkthrough-history persistence the main pipeline has.
+  const [diffMode, setDiffMode] = useState(false);
+  const [baseRef, setBaseRef] = useState("");
+  const [headRef, setHeadRef] = useState("");
+  const [diffResult, setDiffResult] = useState<DiffPipelineResult | null>(null);
   const [activeSection, setActiveSection] = useState(0);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [recents, setRecents] = useState<string[]>([]);
@@ -983,8 +1002,55 @@ function App() {
     }
   }
 
+  async function startDiff() {
+    const trimmedRepo = repoUrl.trim();
+    const trimmedBase = baseRef.trim();
+    const trimmedHead = headRef.trim();
+    if (!trimmedRepo || !trimmedBase || !trimmedHead) {
+      setInputError("Diff mode needs a repo URL and both refs (e.g. a tag, branch, or commit SHA).");
+      return;
+    }
+    setInputError("");
+    setPage("app");
+    setView("progress");
+    setCompleted(new Set());
+    setFailedStage(null);
+    setActiveStage(STAGES[0].id);
+    setErrorMessage("");
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const res = await runDiffPipeline(
+        trimmedRepo,
+        trimmedBase,
+        trimmedHead,
+        ({ stage, ok }) => {
+          if (ok) {
+            setCompleted((prev) => new Set(prev).add(stage));
+            const idx = STAGES.findIndex((s) => s.id === stage);
+            setActiveStage(STAGES[idx + 1]?.id ?? null);
+          } else {
+            setFailedStage(stage);
+          }
+        },
+        controller.signal
+      );
+      setDiffResult(res);
+      setView("diff-result");
+      toast("Diff explained", "success");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
+      setView("error");
+    }
+  }
+
   function retry() {
-    start();
+    if (diffMode) {
+      startDiff();
+    } else {
+      start();
+    }
   }
 
   return (
@@ -1053,6 +1119,19 @@ function App() {
                 recents={recents}
                 history={history}
                 onOpenHistory={openWalkthrough}
+                diffMode={diffMode}
+                onDiffModeChange={setDiffMode}
+                baseRef={baseRef}
+                onBaseRefChange={(v) => {
+                  setBaseRef(v);
+                  if (inputError) setInputError("");
+                }}
+                headRef={headRef}
+                onHeadRefChange={(v) => {
+                  setHeadRef(v);
+                  if (inputError) setInputError("");
+                }}
+                onSubmitDiff={() => startDiff()}
               />
               <FeatureShowcase />
             </>
@@ -1060,6 +1139,16 @@ function App() {
 
           {page === "app" && view === "progress" && (
             <ProgressView completed={completed} activeStage={activeStage} failedStage={failedStage} />
+          )}
+
+          {page === "app" && view === "diff-result" && diffResult && (
+            <DiffResultView
+              result={diffResult}
+              onReset={() => {
+                setView("input");
+                window.history.replaceState(null, "", window.location.pathname);
+              }}
+            />
           )}
 
           {page === "app" && view === "result" && result && (
@@ -1145,6 +1234,13 @@ function InputView({
   recents,
   history,
   onOpenHistory,
+  diffMode,
+  onDiffModeChange,
+  baseRef,
+  onBaseRefChange,
+  headRef,
+  onHeadRefChange,
+  onSubmitDiff,
 }: {
   repoUrl: string;
   onChange: (v: string) => void;
@@ -1155,6 +1251,13 @@ function InputView({
   recents: string[];
   history: WalkthroughEntry[];
   onOpenHistory: (entry: WalkthroughEntry) => void;
+  diffMode: boolean;
+  onDiffModeChange: (v: boolean) => void;
+  baseRef: string;
+  onBaseRefChange: (v: string) => void;
+  headRef: string;
+  onHeadRefChange: (v: string) => void;
+  onSubmitDiff: () => void;
 }) {
   const examples = [
     "github.com/expressjs/express",
@@ -1175,6 +1278,24 @@ function InputView({
 
         <PipelineStrip />
 
+        <div className="persona-row">
+          <span className="persona-label">Mode</span>
+          <div className="persona-toggle">
+            <button
+              className={`persona-btn ${!diffMode ? "persona-btn-active" : ""}`}
+              onClick={() => onDiffModeChange(false)}
+            >
+              Full walkthrough
+            </button>
+            <button
+              className={`persona-btn ${diffMode ? "persona-btn-active" : ""}`}
+              onClick={() => onDiffModeChange(true)}
+            >
+              Explain a diff
+            </button>
+          </div>
+        </div>
+
         <div className={`input-row ${error ? "input-row-error" : ""}`}>
           <span className="input-prefix">url&nbsp;&gt;</span>
           <input
@@ -1185,10 +1306,41 @@ function InputView({
             aria-label="GitHub repository URL"
             aria-invalid={!!error}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onSubmit();
+              if (e.key === "Enter" && !diffMode) onSubmit();
             }}
           />
         </div>
+
+        {diffMode && (
+          <div className="diff-refs-row">
+            <div className={`input-row ${error ? "input-row-error" : ""}`}>
+              <span className="input-prefix">base&nbsp;&gt;</span>
+              <input
+                type="text"
+                value={baseRef}
+                onChange={(e) => onBaseRefChange(e.target.value)}
+                placeholder="e.g. v1.0.0 or main"
+                aria-label="Base ref (tag, branch, or commit SHA)"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onSubmitDiff();
+                }}
+              />
+            </div>
+            <div className={`input-row ${error ? "input-row-error" : ""}`}>
+              <span className="input-prefix">head&nbsp;&gt;</span>
+              <input
+                type="text"
+                value={headRef}
+                onChange={(e) => onHeadRefChange(e.target.value)}
+                placeholder="e.g. v1.1.0 or a commit SHA"
+                aria-label="Head ref (tag, branch, or commit SHA)"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onSubmitDiff();
+                }}
+              />
+            </div>
+          </div>
+        )}
         {error && <p className="input-error">{error}</p>}
 
         <div className="chip-row">
@@ -1230,16 +1382,74 @@ function InputView({
         </div>
 
         <div className="actions">
-          <button className="btn btn-primary" onClick={onSubmit}>
-            Generate walkthrough
+          <button className="btn btn-primary" onClick={diffMode ? onSubmitDiff : onSubmit}>
+            {diffMode ? "Explain the diff" : "Generate walkthrough"}
           </button>
         </div>
 
-        <WalkthroughHistory entries={history} onOpen={onOpenHistory} />
+        {!diffMode && <WalkthroughHistory entries={history} onOpen={onOpenHistory} />}
       </div>
 
       <div className="input-visual">
         <TerminalPreview />
+      </div>
+    </div>
+  );
+}
+
+// Diff mode's result screen — deliberately simpler than ResultView: a diff
+// explanation is always exactly one section, so there's no section sidebar,
+// no diagram, no walkthrough-history persistence to wire up.
+function DiffResultView({
+  result,
+  onReset,
+}: {
+  result: DiffPipelineResult;
+  onReset: () => void;
+}) {
+  return (
+    <div className="panel">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">// {result.repo}</p>
+          <h2>
+            {result.baseRef} → {result.headRef}
+          </h2>
+          <p className="lede">
+            {result.filesChanged} of {result.totalFilesChanged} changed files narrated
+            {result.totalFilesChanged > result.filesChanged ? " (largest changes prioritized)" : ""}.
+          </p>
+        </div>
+        <div className="result-actions">
+          <button className="btn" onClick={onReset} type="button">
+            ← Explain another
+          </button>
+        </div>
+      </div>
+
+      <div className="result-grid">
+        <div className="video-col">
+          <div className="video-wrap">
+            {result.video.video_url ? (
+              <video
+                className="video"
+                src={result.video.video_url}
+                controls
+                playsInline
+                aria-label={`Diff explanation: ${result.section.title}`}
+              />
+            ) : (
+              <div className="video video-placeholder" role="status">
+                Still rendering…
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="sections-col">
+          <h3>{result.section.title}</h3>
+          <p>{result.section.script}</p>
+        </div>
       </div>
     </div>
   );
@@ -1319,103 +1529,19 @@ function splitSentences(text: string): string[] {
   return cleaned.length ? cleaned : [text];
 }
 
-let mermaidInitialized = false;
-function ensureMermaidInit() {
-  if (mermaidInitialized) return;
-  mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
-  mermaidInitialized = true;
-}
-
-let mermaidRenderSeq = 0;
-
-// Renders mermaid source client-side (as real SVG, not a flat image) so
-// individual nodes can be highlighted per section — a rasterized PNG can't
-// do this. Falls back to nothing (parent shows the PNG instead) if the
-// client-side mermaid parser rejects the source.
-//
-// NOTE: node highlighting depends on mermaid's own DOM id convention for
-// flowchart nodes (`flowchart-<nodeId>-<n>`), which is not officially a
-// stable public API — verified against mermaid ^11.4 at the time this was
-// written, but confirm visually if upgrading the mermaid dependency.
-function MermaidDiagram({
-  source,
-  highlightIds = [],
-  className,
-}: {
-  source: string;
-  highlightIds?: string[];
-  className?: string;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [renderedFor, setRenderedFor] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    ensureMermaidInit();
-    let cancelled = false;
-    setError(null);
-    const id = `mermaid-diagram-${++mermaidRenderSeq}`;
-    mermaid
-      .render(id, source)
-      .then(({ svg }) => {
-        if (cancelled) return;
-        if (containerRef.current) containerRef.current.innerHTML = svg;
-        setRenderedFor(source);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Failed to render diagram");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [source]);
-
-  // Highlight the active section's node(s). Runs after the SVG for the
-  // *current* source has actually landed in the DOM (renderedFor === source
-  // guards against highlighting a stale, about-to-be-replaced render).
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || renderedFor !== source) return;
-    container.querySelectorAll(".node").forEach((node) => {
-      node.classList.remove("diagram-node-active");
-    });
-    for (const id of highlightIds) {
-      container
-        .querySelectorAll(`[id^="flowchart-${CSS.escape(id)}-"]`)
-        .forEach((el) => el.classList.add("diagram-node-active"));
-    }
-  }, [highlightIds, renderedFor, source]);
-
-  if (error) {
-    return (
-      <div className={`mermaid-diagram mermaid-diagram-error ${className ?? ""}`}>
-        Diagram couldn't render ({error}).
-      </div>
-    );
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      className={`mermaid-diagram ${className ?? ""}`}
-      aria-label="Architecture diagram"
-    />
-  );
-}
-
 // Full-screen, click-to-zoom architecture-diagram viewer. Reachable at any
 // point via the floating "Diagram" button, the toolbar, the thumbnail, and the
 // picture-in-picture overlay. Esc or a backdrop click closes it.
+//
+// Renders the flat diagramImageUrl PNG only — the persistent DiagramPanel
+// (see App.tsx's ResultView) is the one place that does live SVG rendering
+// and per-node highlighting, so this stays a simple zoomable copy rather
+// than a second rendering system.
 function DiagramModal({
   imageUrl,
-  mermaidSource,
-  highlightIds,
   onClose,
 }: {
   imageUrl: string | null;
-  mermaidSource?: string | null;
-  highlightIds?: string[];
   onClose: () => void;
 }) {
   const [zoom, setZoom] = useState(false);
@@ -1468,15 +1594,7 @@ function DiagramModal({
         <div
           className={`diagram-modal-body ${zoom ? "diagram-modal-body-zoom" : ""}`}
         >
-          {mermaidSource ? (
-            <MermaidDiagram
-              source={mermaidSource}
-              highlightIds={highlightIds}
-              className="diagram-modal-svg"
-            />
-          ) : (
-            <img src={imageUrl ?? ""} alt="Architecture diagram" />
-          )}
+          <img src={imageUrl ?? ""} alt="Architecture diagram" />
         </div>
       </div>
     </div>
@@ -1570,6 +1688,12 @@ function ResultView({
   const video = result.videos[activeSection];
   const section = result.sections[activeSection];
   const [summaryHtml, setSummaryHtml] = useState("");
+  const scorecardBadges = computeScorecard(result.ingestion);
+  const diagramHighlights = resolveDiagramHighlights(
+    result.sections,
+    result.mermaidDiagram ?? null,
+    result.diagramHighlights
+  );
 
   // Subtitles, the animated map, diagram viewing, and fullscreen.
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1674,6 +1798,8 @@ function ResultView({
 
       <div className="result-grid">
         <div className="video-col">
+          <RepoScorecard badges={scorecardBadges} />
+
           <div className="video-wrap" ref={videoWrapRef}>
             {video?.video_url ? (
               <video
@@ -1718,15 +1844,7 @@ function ResultView({
                 type="button"
                 title="Click to enlarge the diagram"
               >
-                {result.mermaidDiagram ? (
-                  <MermaidDiagram
-                    source={result.mermaidDiagram}
-                    highlightIds={activeNodeIds}
-                    className="video-pip-diagram"
-                  />
-                ) : (
-                  <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
-                )}
+                <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
               </button>
             )}
           </div>
@@ -1771,6 +1889,13 @@ function ResultView({
             </div>
           )}
 
+          <DiagramPanel
+            mermaidDiagram={result.mermaidDiagram}
+            diagramImageUrl={result.diagramImageUrl}
+            activeSection={activeSection}
+            highlights={diagramHighlights}
+          />
+
           {section && (
             <div className="transcript-panel">
               <p className="transcript-label">Narration script</p>
@@ -1789,22 +1914,14 @@ function ResultView({
               type="button"
               title="Click to view the architecture diagram"
             >
-              {result.mermaidDiagram ? (
-                <MermaidDiagram
-                  source={result.mermaidDiagram}
-                  highlightIds={activeNodeIds}
-                  className="diagram-thumb-svg"
-                />
-              ) : (
-                <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
-              )}
+              <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
               <span className="diagram-thumb-hint">
                 ⛶ Architecture diagram — click to enlarge (viewable any time)
               </span>
             </button>
           )}
           {activeNodeIds.length > 0 && section?.caption && (
-            <p className="diagram-caption">📍 {section.caption}</p>
+            <p className="diagram-thumb-caption">📍 {section.caption}</p>
           )}
         </div>
 
@@ -1839,12 +1956,10 @@ function ResultView({
       <div className="chat-row">
         <ChatPanel
           ingestion={result.ingestion}
-          placeholder="Ask a question about this codebase…"
-          hint="Powered by Gemini — grounded in this repo's actual files."
-          examples={[
-            "Why is auth separate from the API layer?",
-            "What happens if the token expires?",
-          ]}
+          placeholder="Ask about this codebase…"
+          backend="explain"
+          examples={["Why is auth separate?", "What should I read first?"]}
+          hint={chatHint(true)}
         />
       </div>
 
@@ -1868,8 +1983,6 @@ function ResultView({
       {diagramOpen && hasDiagram && (
         <DiagramModal
           imageUrl={result.diagramImageUrl}
-          mermaidSource={result.mermaidDiagram}
-          highlightIds={activeNodeIds}
           onClose={() => setDiagramOpen(false)}
         />
       )}
