@@ -1,3 +1,4 @@
+import re
 import uuid
 from pathlib import Path
 
@@ -7,15 +8,37 @@ from app import config
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
+# Rectangle node labels: [ ... ] with no nested brackets. This is the shape
+# Gemini overwhelmingly emits, and the one that breaks when the label text
+# contains parentheses (e.g. "Server (src/server.js)").
+_RECT_LABEL_RE = re.compile(r"\[([^\[\]]+)\]")
+
+
+def _sanitize_mermaid(src: str) -> str:
+    """Quote rectangle node-label text that contains parentheses so mermaid's
+    parser on Kroki doesn't choke (e.g. Gemini's "Server (src/server.js)").
+    Labels without parens, and already-quoted labels, are left untouched."""
+
+    def quote(m: re.Match) -> str:
+        text = m.group(1)
+        if "(" not in text and ")" not in text:
+            return m.group(0)
+        if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+            return m.group(0)
+        return '["' + text.replace('"', "#quot;") + '"]'
+
+    return _RECT_LABEL_RE.sub(quote, src)
+
 
 async def render_mermaid_to_png(mermaid_source: str, client: httpx.AsyncClient) -> str:
     """Render mermaid syntax to a PNG via the public Kroki API, save it under
     static/, and return the absolute URL to it. Returns None on failure —
     the diagram is optional, a broken render shouldn't fail the whole job."""
+    sanitized = _sanitize_mermaid(mermaid_source)
     try:
         resp = await client.post(
             f"{config.KROKI_BASE_URL}/mermaid/png",
-            content=mermaid_source.encode("utf-8"),
+            content=sanitized.encode("utf-8"),
             headers={"Content-Type": "text/plain"},
             timeout=30,
         )
