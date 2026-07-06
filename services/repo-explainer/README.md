@@ -129,17 +129,27 @@ whole repo (paired with repo-ingest's `/diff`).
 
 ### `POST /chat` (RAG chat)
 
-Ask questions about the repo. The service chunks `key_files`, retrieves the most
-relevant chunks with a dependency-free TF-IDF keyword score, and answers with the
-LLM — grounded in the actual code.
+Ask follow-up questions about a repo **after** it's been through `/explain`.
+`/explain` chunks the repo (code split on function/class/export boundaries,
+README split by header, plus the file tree as one chunk) and stores those chunks
+in memory keyed by `repo_url` (`src/chunkStore.js`). `/chat` ranks the chunks
+against the question with **BM25** (no embeddings, no external call), takes the
+top 5, and asks the LLM to answer **grounded only in those excerpts**.
 
-Body: the ingestion JSON plus a `question`.
+Chat runs on **Anthropic Claude** (default `claude-sonnet-5`) when
+`ANTHROPIC_API_KEY` is set; otherwise it falls back to OpenRouter
+(`OPENROUTER_CHAT_MODEL`, default `openrouter/free`).
+
+Body:
 
 ```jsonc
 {
-  "key_files": [{ "path": "src/middleware/auth.js", "content": "..." }],
-  "readme": "...",
-  "question": "How does authentication work?"
+  "repo_url": "https://github.com/sindresorhus/slugify",   // required — must match a repo already /explain'd
+  "question": "what does slugifyWithCounter do?",           // required
+  "history": [                                              // optional — last few turns for follow-ups
+    { "role": "user", "content": "..." },
+    { "role": "assistant", "content": "..." }
+  ]
 }
 ```
 
@@ -147,11 +157,30 @@ Response:
 
 ```jsonc
 {
-  "answer": "Auth is JWT-based. src/middleware/auth.js reads the Bearer token...",
-  "sources": ["src/middleware/auth.js#1"],
-  "meta": { "model": "google/gemini-2.5-flash" }
+  "answer": "slugifyWithCounter() returns a stateful slugify that appends -2, -3 … for duplicate inputs, and exposes reset() to clear the counter.",
+  "sources": ["README", "index.js"],   // distinct file paths behind the retrieved chunks
+  "meta": { "model": "claude-sonnet-5" }
 }
 ```
+
+**Errors / behavior**
+
+| Situation                                        | Status | `kind`        |
+| ------------------------------------------------ | ------ | ------------- |
+| `repo_url` not yet processed (no chunks)         | `404`  | `not_found`   |
+| Empty / missing `question` or `repo_url`         | `400`  | `bad_request` |
+| Rate limited (429) after one backoff+retry       | `429`  | `rate_limit`  → "Chat is busy right now, try again in a moment." |
+| Chat call exceeds the 20s cap                    | `504`  | `timeout`     |
+| Zero relevant chunks retrieved                   | `200`  | model is told to say it couldn't find relevant context rather than guess |
+
+Rate-limit handling: a single 429 is retried once after a ~1.5s backoff, then it
+fails gracefully with the friendly "busy" message. On OpenRouter, if the primary
+free model is unavailable it retries against `OPENROUTER_CHAT_FALLBACK_MODEL`.
+
+**Known limitations:** the chunk store is in-memory (per process, ~50 repos LRU),
+so restarting the service or asking a different instance requires re-running
+`/explain`. Retrieval is keyword BM25 (with light prefix expansion), not semantic
+embeddings, so purely conceptual questions with no shared vocabulary may miss.
 
 ### `GET /health`
 
