@@ -179,7 +179,7 @@ const json = (statusCode, obj) => ({
   body: JSON.stringify(obj),
 });
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: CORS, body: "" };
   if (event.httpMethod !== "POST") return json(405, { error: "Method not allowed" });
   if (!API_KEY)
