@@ -12,8 +12,11 @@
  * (chunkStore.js); /chat retrieves the top chunks for a question and answers
  * with the LLM, grounded in the actual code.
  *
- * The LLM client (geminiClient.js) is provider-agnostic OpenAI-compatible;
- * point it at any provider via OPENROUTER_* / GEMINI_* env vars (see config.js).
+ * LLM providers (see config.js):
+ *   - /explain: Anthropic (Claude) when ANTHROPIC_API_KEY is set, else an
+ *     OpenAI-compatible endpoint (OpenRouter/Gemini). Client: geminiClient.js.
+ *   - /chat: Anthropic (Claude) when ANTHROPIC_API_KEY is set, else OpenRouter.
+ *     Client: chatLlm.js.
  */
 import express from "express";
 import cors from "cors";
@@ -181,10 +184,15 @@ const isMain =
 if (isMain) {
   app.listen(config.port, () => {
     console.log(`repo-explainer listening on http://localhost:${config.port}`);
-    console.log(`  model:   ${config.model}`);
-    console.log(`  baseURL: ${config.baseUrl}`);
+    console.log(`  /explain: ${config.explainProvider} (${config.model})`);
+    console.log(
+      `  /chat:    ${config.anthropicApiKey ? `anthropic (${config.anthropicModel})` : `openrouter (${config.chatModel})`}`
+    );
+    if (config.explainProvider !== "anthropic") {
+      console.log(`  baseURL:  ${config.baseUrl}`);
+    }
     if (!config.apiKey) {
-      console.warn("  WARNING: GEMINI_API_KEY is not set — /explain will 500 until it is.");
+      console.warn("  WARNING: no /explain API key set — /explain will 500 until it is.");
     }
   });
 }

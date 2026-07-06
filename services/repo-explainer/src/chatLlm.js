@@ -1,8 +1,15 @@
-// Chat completion for the RAG /chat endpoint, calling OpenRouter's
-// OpenAI-compatible /chat/completions directly (fetch, not the SDK) so we get
-// exact control over the headers, timeout, 429 backoff, and model fallback the
-// chat feature needs — separate from the /explain LLM calls.
+// Chat completion for the RAG /chat endpoint.
+//
+// Prefers Anthropic (Claude) when ANTHROPIC_API_KEY is set — free-tier
+// OpenRouter models are unreliable during a hackathon (constant 429s and
+// week-to-week deprecations), whereas Claude gives grounded, consistent
+// answers. Falls back to OpenRouter's OpenAI-compatible endpoint otherwise.
+//
+// Both paths cap the wait (config.chatTimeoutMs, default 20s), retry once on a
+// 429 after a short backoff, then fail with a friendly "busy" message rather
+// than a raw error. This is kept separate from the /explain LLM calls.
 
+import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config.js";
 
 export class ChatError extends Error {
@@ -15,6 +22,124 @@ export class ChatError extends Error {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Which chat model string /chat will report in its response meta.
+export function activeChatModel() {
+  return config.anthropicApiKey ? config.anthropicModel : config.chatModel;
+}
+
+/**
+ * Run a chat completion. Dispatches to Claude or OpenRouter based on config.
+ * @param {{role:"system"|"user"|"assistant", content:string}[]} messages
+ * @returns {Promise<{ answer: string, model: string }>}
+ */
+export async function chatComplete(messages) {
+  if (config.anthropicApiKey) return chatViaAnthropic(messages);
+  return chatViaOpenRouter(messages);
+}
+
+// --- Anthropic (Claude) -----------------------------------------------------
+
+let anthropic = null;
+function anthropicClient() {
+  if (!anthropic) {
+    // We handle our own 429 backoff + timeout, so disable the SDK's retries.
+    anthropic = new Anthropic({
+      apiKey: config.anthropicApiKey,
+      timeout: config.chatTimeoutMs,
+      maxRetries: 0,
+    });
+  }
+  return anthropic;
+}
+
+// Anthropic takes the system prompt as a top-level param (not a message) and
+// only user/assistant turns in `messages`.
+function splitSystem(messages) {
+  const system = messages
+    .filter((m) => m.role === "system" && m.content)
+    .map((m) => String(m.content))
+    .join("\n\n");
+  const rest = messages
+    .filter((m) => m.role !== "system" && m.content)
+    .map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: String(m.content),
+    }));
+  return { system, rest };
+}
+
+async function chatViaAnthropic(messages) {
+  const { system, rest } = splitSystem(messages);
+  const model = config.anthropicModel;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await anthropicClient().messages.create({
+        model,
+        max_tokens: config.chatMaxTokens,
+        // Note: newer Claude models (e.g. claude-opus-4-8) reject `temperature`,
+        // so we don't send it — the default sampling is fine for grounded QA.
+        system,
+        messages: rest.length ? rest : [{ role: "user", content: "(no question)" }],
+      });
+      const text = (res.content ?? [])
+        .filter((b) => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim();
+      if (text) return { answer: text, model };
+      throw new ChatError("Chat model returned an empty response.", {
+        statusCode: 502,
+        kind: "upstream",
+      });
+    } catch (err) {
+      if (err instanceof ChatError) throw err;
+      const status = err?.status ?? err?.response?.status;
+
+      if (status === 429) {
+        if (attempt === 0) {
+          console.warn(`[chat] 429 from ${model} — backing off 1.5s and retrying`);
+          await sleep(1500);
+          continue;
+        }
+        throw new ChatError("Chat is busy right now, try again in a moment.", {
+          statusCode: 429,
+          kind: "rate_limit",
+        });
+      }
+
+      if (
+        err instanceof Anthropic.APIConnectionTimeoutError ||
+        String(err?.name ?? "").toLowerCase().includes("timeout")
+      ) {
+        throw new ChatError(
+          `Chat timed out after ${config.chatTimeoutMs / 1000}s.`,
+          { statusCode: 504, kind: "timeout" }
+        );
+      }
+
+      if (status === 401 || status === 403) {
+        throw new ChatError("Chat auth failed — check ANTHROPIC_API_KEY.", {
+          statusCode: 500,
+          kind: "auth",
+        });
+      }
+
+      throw new ChatError(`Chat model error: ${err?.message ?? err}`, {
+        statusCode: 502,
+        kind: "upstream",
+      });
+    }
+  }
+
+  throw new ChatError("Chat failed — no response.", {
+    statusCode: 502,
+    kind: "upstream",
+  });
+}
+
+// --- OpenRouter fallback (OpenAI-compatible /chat/completions) ---------------
 
 // A model-availability error (free models get deprecated often) — worth
 // retrying against the configured fallback model rather than failing.
@@ -47,7 +172,7 @@ async function callModel(model, messages) {
         model,
         messages,
         temperature: 0.3,
-        max_tokens: 700, // 2-4 sentence answers; also keeps under free-tier caps
+        max_tokens: config.chatMaxTokens,
       }),
       signal: controller.signal,
     });
@@ -74,12 +199,7 @@ async function callModel(model, messages) {
   }
 }
 
-/**
- * Run a chat completion with the configured chat model, retrying once on 429
- * and falling back to config.chatFallbackModel if the primary is unavailable.
- * @returns {Promise<{ answer: string, model: string }>}
- */
-export async function chatComplete(messages) {
+async function chatViaOpenRouter(messages) {
   const models = [config.chatModel];
   if (config.chatFallbackModel && config.chatFallbackModel !== config.chatModel) {
     models.push(config.chatFallbackModel);
@@ -103,7 +223,6 @@ export async function chatComplete(messages) {
       }
 
       if (res.status === 429) {
-        // Retry once after a short backoff, then fail gracefully.
         if (attempt === 0) {
           console.warn(`[chat] 429 from ${model} — backing off 1.5s and retrying`);
           await sleep(1500);
@@ -119,14 +238,13 @@ export async function chatComplete(messages) {
         console.warn(
           `[chat] model '${model}' unavailable (${res.status}) — trying fallback if set`
         );
-        lastError = new ChatError(
-          `Chat model '${model}' is unavailable.`,
-          { statusCode: 502, kind: "upstream" }
-        );
+        lastError = new ChatError(`Chat model '${model}' is unavailable.`, {
+          statusCode: 502,
+          kind: "upstream",
+        });
         break; // try the next (fallback) model
       }
 
-      // Any other non-OK status: don't spin, surface it.
       throw new ChatError(
         `Chat model error (${res.status}): ${data?.error?.message ?? "unknown"}`,
         { statusCode: 502, kind: "upstream" }

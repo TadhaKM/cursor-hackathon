@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config.js";
 
 // Typed error so the HTTP layer can map failures to clean status codes.
@@ -41,9 +42,8 @@ export function classifyGeminiError(err) {
   return { statusCode: 502, kind: "upstream" };
 }
 
-// Single OpenAI-compatible client pointed at Google AI Studio (Gemini). The
-// SDK's built-in retries are disabled; we handle them ourselves so the
-// semantics are explicit.
+// Single OpenAI-compatible client (OpenRouter/Gemini). The SDK's built-in
+// retries are disabled; we handle them ourselves so the semantics are explicit.
 let client = null;
 function getClient() {
   if (!client) {
@@ -55,6 +55,63 @@ function getClient() {
     });
   }
   return client;
+}
+
+// Anthropic (Claude) client, used when explainProvider === "anthropic".
+let anthropicClient = null;
+function getAnthropicClient() {
+  if (!anthropicClient) {
+    anthropicClient = new Anthropic({
+      apiKey: config.apiKey,
+      timeout: config.timeoutMs,
+      maxRetries: 0,
+    });
+  }
+  return anthropicClient;
+}
+
+// Make one LLM call, dispatching to Claude or the OpenAI-compatible endpoint.
+// Returns the assistant text. Newer Claude models reject `temperature`, so we
+// don't send it, and they have no response_format — when json is requested we
+// nudge via the system prompt (narration parsing tolerates fences/prose).
+async function callOnce({ system, user, json, temperature }) {
+  if (config.explainProvider === "anthropic") {
+    const sys = json
+      ? `${system}\n\nIMPORTANT: Respond with ONLY the requested JSON object — no markdown fences, no prose before or after.`
+      : system;
+    const res = await getAnthropicClient().messages.create({
+      model: config.model,
+      max_tokens: config.maxTokens,
+      system: sys,
+      messages: [{ role: "user", content: user }],
+    });
+    const text = (res.content ?? [])
+      .filter((b) => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+    if (!text) throw new Error("Claude returned an empty response");
+    return text;
+  }
+
+  const response = await getClient().chat.completions.create(
+    {
+      model: config.model,
+      temperature,
+      max_tokens: config.maxTokens,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      ...(json ? { response_format: { type: "json_object" } } : {}),
+    },
+    { timeout: config.timeoutMs }
+  );
+  const content = response?.choices?.[0]?.message?.content;
+  if (!content || !content.trim()) {
+    throw new Error("LLM returned an empty response");
+  }
+  return content.trim();
 }
 
 function sleep(ms) {
@@ -101,25 +158,7 @@ export async function chat({
 
   while (true) {
     try {
-      const response = await getClient().chat.completions.create(
-        {
-          model: config.model,
-          temperature,
-          max_tokens: config.maxTokens,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: user },
-          ],
-          ...(json ? { response_format: { type: "json_object" } } : {}),
-        },
-        { timeout: config.timeoutMs }
-      );
-
-      const content = response?.choices?.[0]?.message?.content;
-      if (!content || !content.trim()) {
-        throw new Error("Gemini returned an empty response");
-      }
-      return content.trim();
+      return await callOnce({ system, user, json, temperature });
     } catch (err) {
       lastError = err;
       const status = err?.status ?? err?.response?.status;
@@ -127,8 +166,10 @@ export async function chat({
 
       // Auth won't fix itself on retry — fail fast and log loudly.
       if (kind === "auth") {
+        const keyVar =
+          config.explainProvider === "anthropic" ? "ANTHROPIC_API_KEY" : "the LLM API key";
         console.error(
-          `[${label}] AUTH ERROR from Gemini — check GEMINI_API_KEY / GEMINI_BASE_URL. ${err?.message ?? err}`
+          `[${label}] AUTH ERROR (${config.explainProvider}) — check ${keyVar}. ${err?.message ?? err}`
         );
         break;
       }
@@ -173,13 +214,14 @@ export async function chat({
 
   const { statusCode, kind } = classifyGeminiError(lastError);
   const message = lastError?.message ?? String(lastError);
+  const provider = config.explainProvider === "anthropic" ? "Claude" : "LLM";
   const readable =
     kind === "timeout"
-      ? `Gemini call "${label}" timed out after ${config.timeoutMs}ms.`
+      ? `${provider} call "${label}" timed out after ${config.timeoutMs}ms.`
       : kind === "auth"
-        ? `Gemini authentication failed for call "${label}". Check GEMINI_API_KEY.`
+        ? `${provider} authentication failed for call "${label}". Check the API key.`
         : kind === "rate_limit"
-          ? `Gemini call "${label}" is rate limited (429) — free-tier quota exhausted. Wait a minute or use a key with more quota.`
-          : `Gemini call "${label}" failed: ${message}`;
+          ? `${provider} call "${label}" is rate limited (429) — quota exhausted. Wait a minute or use a key with more quota.`
+          : `${provider} call "${label}" failed: ${message}`;
   throw new GeminiError(readable, { statusCode, kind, cause: lastError });
 }

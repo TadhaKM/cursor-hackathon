@@ -11,14 +11,33 @@ function int(value, fallback) {
 const env = process.env;
 const first = (...vals) => vals.find((v) => v != null && v !== "");
 
+const anthropicApiKey = first(env.ANTHROPIC_API_KEY, env.CLAUDE_API_KEY) ?? "";
+
+// /explain provider. Defaults to Anthropic (Claude) when an Anthropic key is
+// present — it's far more reliable than free OpenRouter/Gemini tiers (which
+// 429/503 constantly). Force with EXPLAIN_PROVIDER=anthropic|openai.
+const explainProvider = (
+  env.EXPLAIN_PROVIDER ?? (anthropicApiKey ? "anthropic" : "openai")
+).toLowerCase();
+
+// Model for /explain per provider. Claude Sonnet handles the large prompts well.
+const explainModel =
+  explainProvider === "anthropic"
+    ? first(env.EXPLAIN_MODEL, env.ANTHROPIC_MODEL, env.CLAUDE_MODEL) ?? "claude-sonnet-5"
+    : first(env.OPENROUTER_MODEL, env.GEMINI_MODEL, env.QWEN_MODEL) ?? "google/gemini-2.5-flash";
+
 export const config = {
-  apiKey: first(env.OPENROUTER_API_KEY, env.GEMINI_API_KEY, env.QWEN_API_KEY) ?? "",
+  // Which provider /explain uses: "anthropic" (Claude SDK) or "openai"
+  // (OpenAI-compatible endpoint — OpenRouter/Gemini).
+  explainProvider,
+  apiKey:
+    explainProvider === "anthropic"
+      ? anthropicApiKey
+      : first(env.OPENROUTER_API_KEY, env.GEMINI_API_KEY, env.QWEN_API_KEY) ?? "",
   baseUrl:
     first(env.OPENROUTER_BASE_URL, env.GEMINI_BASE_URL, env.QWEN_BASE_URL) ??
     "https://openrouter.ai/api/v1",
-  model:
-    first(env.OPENROUTER_MODEL, env.GEMINI_MODEL, env.QWEN_MODEL) ??
-    "google/gemini-2.5-flash",
+  model: explainModel,
   timeoutMs: int(
     first(env.OPENROUTER_TIMEOUT_MS, env.GEMINI_TIMEOUT_MS, env.QWEN_TIMEOUT_MS),
     90000
@@ -37,14 +56,20 @@ export const config = {
   refineNarration: (env.REFINE_NARRATION ?? "false").toLowerCase() === "true",
 
   // --- RAG /chat ---
-  // Defaults to OpenRouter's free auto-router ("openrouter/free"), which picks
-  // an available free model per request — so chat keeps working even when a
-  // specific free model gets deprecated mid-event (this happens often).
-  // Override with OPENROUTER_CHAT_MODEL; OPENROUTER_CHAT_FALLBACK_MODEL is tried
-  // once if the primary model is unavailable.
+  // Chat uses Anthropic (Claude) when ANTHROPIC_API_KEY is set — free-tier
+  // OpenRouter models are unreliable (constant 429/deprecations), and Claude
+  // gives grounded, high-quality answers. Falls back to OpenRouter otherwise.
+  anthropicApiKey,
+  anthropicModel:
+    first(env.ANTHROPIC_CHAT_MODEL, env.ANTHROPIC_MODEL, env.CLAUDE_MODEL) ?? "claude-sonnet-5",
+  // Max tokens for a chat answer (2-4 sentences; keeps latency/cost sane).
+  chatMaxTokens: int(first(env.CHAT_MAX_TOKENS), 700),
+  // OpenRouter fallback: its free auto-router ("openrouter/free") picks an
+  // available free model per request. Override with OPENROUTER_CHAT_MODEL.
   chatModel: first(env.OPENROUTER_CHAT_MODEL) ?? "openrouter/free",
   chatFallbackModel: first(env.OPENROUTER_CHAT_FALLBACK_MODEL) ?? "",
-  chatTimeoutMs: int(first(env.OPENROUTER_CHAT_TIMEOUT_MS), 20000),
+  // Cap the wait on a chat call (spec: 20s).
+  chatTimeoutMs: int(first(env.CHAT_TIMEOUT_MS, env.OPENROUTER_CHAT_TIMEOUT_MS), 20000),
   // Sent as HTTP-Referer / X-Title for OpenRouter dashboard attribution.
   appReferer: first(env.OPENROUTER_APP_REFERER) ?? "https://redio.app",
   appTitle: first(env.OPENROUTER_APP_TITLE) ?? "Redio",
@@ -53,7 +78,9 @@ export const config = {
 export function assertApiKey() {
   if (!config.apiKey) {
     throw new Error(
-      "No LLM API key set. Copy .env.example to .env and add OPENROUTER_API_KEY."
+      config.explainProvider === "anthropic"
+        ? "ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add it."
+        : "No LLM API key set. Copy .env.example to .env and add OPENROUTER_API_KEY."
     );
   }
 }
