@@ -1,15 +1,23 @@
 // Netlify Function port of the chat proxy (api/chat.ts is Vercel-only).
 // Grounds answers in the repo's ingested files (TF-IDF over key files) and
-// calls Google Gemini. Uses only Node built-ins (native fetch) — no deps.
+// calls an LLM. Prefers Anthropic Claude when ANTHROPIC_API_KEY is set (matches
+// the repo-explainer's /chat); otherwise falls back to an OpenAI-compatible
+// provider (OpenRouter/Gemini). Uses only Node built-ins (native fetch) — no deps.
 
-// OpenRouter (OpenAI-compatible). Falls back to legacy GEMINI_* env names.
-const API_KEY = process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
+// Anthropic (Claude) — preferred.
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
+
+// OpenAI-compatible fallback (OpenRouter, or legacy GEMINI_* names).
+const OAI_API_KEY = process.env.OPENROUTER_API_KEY || process.env.GEMINI_API_KEY;
 const BASE_URL =
   process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
 const MODEL =
   process.env.OPENROUTER_MODEL ||
   process.env.GEMINI_MODEL ||
   "google/gemini-2.5-flash";
+
+const API_KEY = ANTHROPIC_API_KEY || OAI_API_KEY;
 
 const MAX_CONTEXT_CHARS = 48_000;
 const TOP_FILES = 6;
@@ -99,11 +107,45 @@ function systemPrompt(contextType) {
 }
 
 async function callLLM(system, userPrompt) {
+  if (ANTHROPIC_API_KEY) return callClaude(system, userPrompt);
+  return callOpenAICompatible(system, userPrompt);
+}
+
+// Anthropic REST — no temperature (newer Claude models reject it).
+async function callClaude(system, userPrompt) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1024,
+      system,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.error?.message ?? `Claude error (${res.status})`);
+  }
+  const text = (data?.content ?? [])
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("")
+    .trim();
+  if (!text) throw new Error("Claude returned an empty response");
+  return text;
+}
+
+async function callOpenAICompatible(system, userPrompt) {
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${API_KEY}`,
+      Authorization: `Bearer ${OAI_API_KEY}`,
     },
     body: JSON.stringify({
       model: MODEL,
@@ -141,7 +183,9 @@ exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: CORS, body: "" };
   if (event.httpMethod !== "POST") return json(405, { error: "Method not allowed" });
   if (!API_KEY)
-    return json(500, { error: "OPENROUTER_API_KEY is not configured on the server" });
+    return json(500, {
+      error: "No chat API key configured — set ANTHROPIC_API_KEY (or OPENROUTER_API_KEY).",
+    });
 
   let body;
   try {
