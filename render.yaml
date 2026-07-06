@@ -1,7 +1,7 @@
 # Render Blueprint — deploys all three backend services.
 # In Render: New + → Blueprint → pick this repo. Set the `sync: false` secrets
-# (GITHUB_TOKEN, GEMINI_API_KEY, HEYGEN_API_KEY) in each service's dashboard.
-# The frontend deploys separately on Vercel (see DEPLOY.md).
+# (GITHUB_TOKEN, ANTHROPIC_API_KEY, HEYGEN_API_KEY) in each service's dashboard.
+# The frontend deploys separately on Netlify/Vercel (see DEPLOY.md).
 services:
   - type: web
     name: repo-ingest
@@ -24,12 +24,11 @@ services:
     buildCommand: npm install
     startCommand: npm start
     envVars:
-      - key: GEMINI_API_KEY
+      # /explain and /chat run on Anthropic Claude. Set the key in the dashboard.
+      - key: ANTHROPIC_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: gemini-2.5-flash
-      - key: GEMINI_TIMEOUT_MS
-        value: "90000"
+      - key: ANTHROPIC_MODEL
+        value: claude-sonnet-5
 
   - type: web
     name: video-renderer
