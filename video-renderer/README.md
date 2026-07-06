@@ -1,7 +1,8 @@
-# video-renderer (Person 3)
+# video-renderer
 
-Takes narration script sections + an optional mermaid diagram, and produces
-HeyGen talking-avatar videos + a rendered diagram image.
+Stage 3 of the Redio pipeline. Takes narration script sections + an optional
+mermaid diagram and produces HeyGen talking-avatar videos (one per section) plus
+a rendered diagram image (via Kroki).
 
 ## Setup
 
@@ -12,7 +13,11 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set `HEYGEN_API_KEY`, then fetch avatar/voice IDs and set them too:
+**No HeyGen key or credits?** Set `MOCK_VIDEO=true` in `.env` to skip HeyGen and
+return instant placeholder videos — the rest of the pipeline (including the real
+diagram) still works, which is ideal for frontend dev and demos.
+
+For real videos, set `HEYGEN_API_KEY`, then fetch avatar/voice IDs and set them too:
 
 ```
 uvicorn app.main:app --reload --port 8000
@@ -31,6 +36,10 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 ## API
+
+### `GET /` and `GET /health`
+
+Health check — returns `{ "ok": true, "service": "video-renderer" }`.
 
 ### `POST /render`
 
@@ -89,15 +98,18 @@ Proxies HeyGen's avatar/voice lists — use these once to pick the IDs for
 - A failed HeyGen render is retried once automatically before being marked
   `"failed"` for that section.
 - Diagram rendering uses the public Kroki API (`kroki.io/mermaid/png`) — no
-  local mermaid-cli/puppeteer install needed. The rendered PNG is saved to
-  `static/` and served from this same service; set `PUBLIC_BASE_URL` in
-  `.env` once deployed so the returned URL is absolute (e.g. your Render
-  service URL).
-- Confirm HeyGen's `/v2/video/generate` and `/v1/video_status.get` shapes
-  against their current docs before a real run — video-gen APIs shift
-  between versions and this was built from the partner docs link.
-- Rendering requires HeyGen *API* credits on the account — without them,
-  `/render` fails fast with `MOVIO_PAYMENT_INSUFFICIENT_CREDIT`.
+  local mermaid-cli/puppeteer install needed. Node labels with special
+  characters are quoted first so Kroki's parser doesn't choke (`app/diagram.py`).
+  The rendered PNG is saved to `static/` and served from this same service. The
+  returned URL is absolute, built from `PUBLIC_BASE_URL` — which auto-derives
+  from Render's `RENDER_EXTERNAL_URL` in production, so no manual config needed.
+  (Note: `static/` is local disk — ephemeral on redeploy, so run one instance.)
+- HeyGen captions are burned into the rendered videos (`caption: true`).
+- A failed HeyGen render is retried once before being marked `"failed"`; a job
+  that hits an unexpected error is marked `"failed"` rather than hanging.
+- Real rendering requires HeyGen *API* credits on the account — without them,
+  `/render` fails fast with `MOVIO_PAYMENT_INSUFFICIENT_CREDIT`. Use
+  `MOCK_VIDEO=true` if you don't have credits.
 - `curl` smoke test:
   ```
   curl -X POST localhost:8000/render -H 'Content-Type: application/json' \

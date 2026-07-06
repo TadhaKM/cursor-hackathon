@@ -20,8 +20,11 @@ interface ChatRequestBody {
   ingestion: Ingestion;
 }
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
+// OpenRouter (OpenAI-compatible). Falls back to legacy GEMINI_* env names.
+const API_KEY = process.env.OPENROUTER_API_KEY ?? process.env.GEMINI_API_KEY;
+const BASE_URL = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1";
+const MODEL =
+  process.env.OPENROUTER_MODEL ?? process.env.GEMINI_MODEL ?? "google/gemini-2.5-flash";
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN;
 
 const MAX_CONTEXT_CHARS = 48_000;
@@ -125,34 +128,36 @@ function systemPrompt(contextType: "repo" | "tool"): string {
   ].join(" ");
 }
 
-async function callGemini(system: string, userPrompt: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
-  const res = await fetch(url, {
+async function callLLM(system: string, userPrompt: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${API_KEY}`,
+    },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-      generationConfig: {
-        temperature: 0.3,
-        maxOutputTokens: 1024,
-      },
+      model: MODEL,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 1024,
     }),
   });
 
   const data = (await res.json()) as {
     error?: { message?: string };
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    choices?: { message?: { content?: string } }[];
   };
 
   if (!res.ok) {
-    throw new Error(data.error?.message ?? `Gemini API error (${res.status})`);
+    throw new Error(data.error?.message ?? `LLM error (${res.status})`);
   }
 
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text = data.choices?.[0]?.message?.content;
   if (!text) {
-    throw new Error("Gemini returned an empty response");
+    throw new Error("LLM returned an empty response");
   }
 
   return text.trim();
@@ -191,9 +196,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  if (!GEMINI_API_KEY) {
+  if (!API_KEY) {
     return res.status(500).json({
-      error: "GEMINI_API_KEY is not configured on the server",
+      error: "OPENROUTER_API_KEY is not configured on the server",
     });
   }
 
@@ -223,7 +228,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : buildRepoContext(ingestion, question.trim());
 
     const userPrompt = `Context:\n${context}\n\nQuestion: ${question.trim()}`;
-    const answer = await callGemini(systemPrompt(context_type), userPrompt);
+    const answer = await callLLM(systemPrompt(context_type), userPrompt);
 
     return res.status(200).json({ answer, sources });
   } catch (err) {

@@ -83,10 +83,11 @@ export function buildNarrationMessages(architectureSummary, persona) {
     `- Every section MUST be between ${SECTION_WORD_TARGET.min} and ${SECTION_WORD_TARGET.max} words (~60-90 seconds spoken). Never under ${SECTION_WORD_BOUNDS.min} or over ${SECTION_WORD_BOUNDS.max} words — a downstream text-to-video service rejects long scripts, and very short sections feel abrupt. Keep the sections roughly even in length.`,
     "- End the Overview with a natural transition sentence that leads into the first deep-dive section (e.g. \"Let's start with how requests actually get handled.\").",
     "- Before finishing, silently check each section's word count is in range and rewrite any that aren't.",
+    "- For each section, also write a caption: a plain 5-8 word label summarizing what that section covers (e.g. \"Handles user login and sessions\"). No trailing period, not a full sentence — a label, not prose.",
     "",
     personaGuidance(persona),
     "",
-    'Output ONLY valid JSON in exactly this shape, with no surrounding prose or code fences: { "sections": [ { "title": string, "script": string } ] }',
+    'Output ONLY valid JSON in exactly this shape, with no surrounding prose or code fences: { "sections": [ { "title": string, "script": string, "caption": string } ] }',
   ].join("\n");
 
   const user = [
@@ -157,6 +158,78 @@ export function buildMermaidMessages(context, architectureSummary, { strict = fa
     "",
     "FILE TREE / CONTEXT:",
     context,
+  ].join("\n");
+
+  return { system, user };
+}
+
+// Maps narration sections to the Mermaid diagram node ids they discuss, so
+// the frontend can highlight the relevant node(s) while that section plays.
+// Runs after both narration and the diagram exist, since it needs both.
+export function buildDiagramHighlightMessages(sections, mermaidDiagram) {
+  const system = [
+    "You map narration sections to the Mermaid diagram nodes they discuss.",
+    "Given a Mermaid diagram and a list of narration sections, identify which node ids (the short id before the [ ] label, e.g. the \"A\" in `A[API Layer]`) each section is primarily about.",
+    "A section may map to zero, one, or several node ids. Only use ids that literally appear in the diagram below — never invent one.",
+    "A general/overview section that isn't about a specific node should map to an empty array.",
+    'Output ONLY valid JSON in exactly this shape, no code fences: { "highlights": [ { "title": string, "node_ids": string[] } ] }',
+  ].join("\n");
+
+  const sectionList = sections
+    .map((s, i) => `${i + 1}. "${s.title}": ${s.script.slice(0, 300)}`)
+    .join("\n");
+
+  const user = [
+    "MERMAID DIAGRAM:",
+    mermaidDiagram,
+    "",
+    "SECTIONS:",
+    sectionList,
+  ].join("\n");
+
+  return { system, user };
+}
+
+// Diff mode: narrate what changed between two refs instead of a full repo
+// snapshot. One section only (not a multi-section walkthrough), same
+// spoken-style rules as the main narration prompt.
+export function buildDiffNarrationMessages({ base_ref, head_ref, commits = [], files = [] }) {
+  const system = [
+    "You are a senior engineer explaining a code change to a teammate who's coming back to this codebase after time away. This is a spoken video script, not a changelog.",
+    "",
+    "VOICE AND STYLE (most important):",
+    "- Write exactly how a person talks. Use contractions (it's, we're, you'll, that's). Keep sentences short and punchy.",
+    "- NO markdown, NO headers, NO bullet points, NO lists, NO code blocks inside the script text. Just flowing spoken sentences.",
+    "- Address the listener directly as \"you\".",
+    "- BANNED phrasings: \"This diff contains...\", \"The following files were changed...\", \"This commit adds...\". These sound like a changelog being read aloud.",
+    "",
+    "CONTENT:",
+    "- Focus on BEHAVIOR changes and why they likely matter to someone returning to this code — not line-by-line noise, and not every single file.",
+    "- Reference actual changed file names.",
+    "- If the diff is mostly mechanical (formatting, dependency bumps, generated files) say so plainly instead of inventing significance that isn't there.",
+    "- Do not invent changes that aren't in the diff below.",
+    "",
+    `- The script MUST be between ${SECTION_WORD_TARGET.min} and ${SECTION_WORD_TARGET.max} words (~60-90 seconds spoken).`,
+    "",
+    'Output ONLY valid JSON in exactly this shape, no code fences: { "title": string, "script": string }',
+  ].join("\n");
+
+  const commitList = commits.length
+    ? commits.map((c) => `- ${c.message.split("\n")[0]}`).join("\n")
+    : "(no commit messages available)";
+
+  const fileList = files
+    .map((f) => `--- ${f.path} (${f.status}, +${f.additions}/-${f.deletions}) ---\n${f.patch}`)
+    .join("\n\n");
+
+  const user = [
+    `Comparing ${base_ref} to ${head_ref}.`,
+    "",
+    "RECENT COMMIT MESSAGES:",
+    commitList,
+    "",
+    "CHANGED FILES:",
+    fileList,
   ].join("\n");
 
   return { system, user };

@@ -2,11 +2,13 @@ import { useEffect, useRef, useState, useCallback, type ReactNode } from "react"
 import { marked } from "marked";
 import {
   runPipeline,
+  runDiffPipeline,
   backendMode,
   chatBackend,
   TOOL_DOCS,
   type StageId,
   type PipelineResult,
+  type DiffPipelineResult,
   type Persona,
   type IngestResult,
 } from "./api";
@@ -26,7 +28,7 @@ import {
 } from "./history";
 import "./App.css";
 
-type ViewState = "input" | "progress" | "result" | "error";
+type ViewState = "input" | "progress" | "result" | "diff-result" | "error";
 type Page = "app" | "about" | "faq" | "changelog";
 
 const PIPELINE_STEPS = ["Ingest repo", "Explain architecture", "Render videos"];
@@ -143,6 +145,7 @@ const STEP_LABELS: Record<ViewState, string> = {
   input: "Step 1 · Paste a repo",
   progress: "Step 2 · Building",
   result: "Step 3 · Walkthrough ready",
+  "diff-result": "Step 3 · Diff explained",
   error: "Something went wrong",
 };
 
@@ -225,11 +228,11 @@ function chatHint(hasRepo: boolean): string {
       ? "Powered by Gemini — grounded in this repo's actual files."
       : "Powered by Gemini — ask about the pipeline, timing, or limitations.";
   }
-  if (backend === "gemini-rag" && hasRepo) {
+  if (backend === "explain" && hasRepo) {
     return "Powered by Gemini RAG — grounded in this repo's key files.";
   }
   return hasRepo
-    ? "Mock chat — set VITE_EXPLAIN_URL or VITE_CHAT_URL (both Gemini)."
+    ? "Mock chat — set VITE_EXPLAIN_URL (Gemini) or VITE_CHAT_URL (Gemini)."
     : "Mock chat for tool FAQ — set VITE_CHAT_URL for Gemini answers.";
 }
 
@@ -252,7 +255,7 @@ function AskBuilder({ repoIngestion, repoName }: { repoIngestion?: IngestResult;
               ingestion={repoIngestion ?? TOOL_DOCS}
               contextType={repoIngestion ? "repo" : "tool"}
               placeholder={
-                repoIngestion ? "Ask about this codebase…" : "Ask how repo → video works…"
+                repoIngestion ? "Ask about this codebase…" : "Ask how Redio works…"
               }
               hint={chatHint(!!repoIngestion)}
             />
@@ -606,7 +609,7 @@ const FAQ_ITEMS: { cat: FaqCategory; q: string; a: string }[] = [
   {
     cat: "chat",
     q: "Does the chat use the same context as the video?",
-    a: "On the results page, yes — chat is grounded in the same ingested repo files the explainer used. The floating \"?\" button on other pages answers general questions about how repo → video works.",
+    a: "On the results page, yes — chat is grounded in the same ingested repo files the explainer used. The floating \"?\" button on other pages answers general questions about how Redio works.",
   },
   {
     cat: "limits",
@@ -781,7 +784,7 @@ function ChangelogPage() {
             <span className="terminal-dot terminal-dot-del" />
             <span className="terminal-dot terminal-dot-add" />
             <span className="terminal-dot terminal-dot-pop" />
-            <span className="changelog-terminal-label">git log --oneline repo-to-video</span>
+            <span className="changelog-terminal-label">git log --oneline redio</span>
           </div>
           <div className="changelog-filters" role="tablist" aria-label="Filter by version">
             {versions.map((v) => (
@@ -874,6 +877,15 @@ function App() {
   const [failedStage, setFailedStage] = useState<StageId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [result, setResult] = useState<PipelineResult | null>(null);
+  // Diff mode — explain what changed between two refs instead of a full
+  // repo walkthrough. Deliberately kept separate from the main result/
+  // history machinery above: diff results are always exactly one section,
+  // so they don't need the section sidebar, keyboard shortcuts, or
+  // walkthrough-history persistence the main pipeline has.
+  const [diffMode, setDiffMode] = useState(false);
+  const [baseRef, setBaseRef] = useState("");
+  const [headRef, setHeadRef] = useState("");
+  const [diffResult, setDiffResult] = useState<DiffPipelineResult | null>(null);
   const [activeSection, setActiveSection] = useState(0);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [recents, setRecents] = useState<string[]>([]);
@@ -990,14 +1002,61 @@ function App() {
     }
   }
 
+  async function startDiff() {
+    const trimmedRepo = repoUrl.trim();
+    const trimmedBase = baseRef.trim();
+    const trimmedHead = headRef.trim();
+    if (!trimmedRepo || !trimmedBase || !trimmedHead) {
+      setInputError("Diff mode needs a repo URL and both refs (e.g. a tag, branch, or commit SHA).");
+      return;
+    }
+    setInputError("");
+    setPage("app");
+    setView("progress");
+    setCompleted(new Set());
+    setFailedStage(null);
+    setActiveStage(STAGES[0].id);
+    setErrorMessage("");
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const res = await runDiffPipeline(
+        trimmedRepo,
+        trimmedBase,
+        trimmedHead,
+        ({ stage, ok }) => {
+          if (ok) {
+            setCompleted((prev) => new Set(prev).add(stage));
+            const idx = STAGES.findIndex((s) => s.id === stage);
+            setActiveStage(STAGES[idx + 1]?.id ?? null);
+          } else {
+            setFailedStage(stage);
+          }
+        },
+        controller.signal
+      );
+      setDiffResult(res);
+      setView("diff-result");
+      toast("Diff explained", "success");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
+      setView("error");
+    }
+  }
+
   function retry() {
-    start();
+    if (diffMode) {
+      startDiff();
+    } else {
+      start();
+    }
   }
 
   return (
     <div className="shell">
       <header className="topbar">
-        <span className="topbar-brand">repo → video</span>
+        <span className="topbar-brand">Redio</span>
         <nav className="nav-links">
           <button className={`nav-link ${page === "app" ? "nav-link-active" : ""}`} onClick={() => setPage("app")}>
             App
@@ -1060,6 +1119,19 @@ function App() {
                 recents={recents}
                 history={history}
                 onOpenHistory={openWalkthrough}
+                diffMode={diffMode}
+                onDiffModeChange={setDiffMode}
+                baseRef={baseRef}
+                onBaseRefChange={(v) => {
+                  setBaseRef(v);
+                  if (inputError) setInputError("");
+                }}
+                headRef={headRef}
+                onHeadRefChange={(v) => {
+                  setHeadRef(v);
+                  if (inputError) setInputError("");
+                }}
+                onSubmitDiff={() => startDiff()}
               />
               <FeatureShowcase />
             </>
@@ -1067,6 +1139,16 @@ function App() {
 
           {page === "app" && view === "progress" && (
             <ProgressView completed={completed} activeStage={activeStage} failedStage={failedStage} />
+          )}
+
+          {page === "app" && view === "diff-result" && diffResult && (
+            <DiffResultView
+              result={diffResult}
+              onReset={() => {
+                setView("input");
+                window.history.replaceState(null, "", window.location.pathname);
+              }}
+            />
           )}
 
           {page === "app" && view === "result" && result && (
@@ -1152,6 +1234,13 @@ function InputView({
   recents,
   history,
   onOpenHistory,
+  diffMode,
+  onDiffModeChange,
+  baseRef,
+  onBaseRefChange,
+  headRef,
+  onHeadRefChange,
+  onSubmitDiff,
 }: {
   repoUrl: string;
   onChange: (v: string) => void;
@@ -1162,6 +1251,13 @@ function InputView({
   recents: string[];
   history: WalkthroughEntry[];
   onOpenHistory: (entry: WalkthroughEntry) => void;
+  diffMode: boolean;
+  onDiffModeChange: (v: boolean) => void;
+  baseRef: string;
+  onBaseRefChange: (v: string) => void;
+  headRef: string;
+  onHeadRefChange: (v: string) => void;
+  onSubmitDiff: () => void;
 }) {
   const examples = [
     "github.com/expressjs/express",
@@ -1182,6 +1278,24 @@ function InputView({
 
         <PipelineStrip />
 
+        <div className="persona-row">
+          <span className="persona-label">Mode</span>
+          <div className="persona-toggle">
+            <button
+              className={`persona-btn ${!diffMode ? "persona-btn-active" : ""}`}
+              onClick={() => onDiffModeChange(false)}
+            >
+              Full walkthrough
+            </button>
+            <button
+              className={`persona-btn ${diffMode ? "persona-btn-active" : ""}`}
+              onClick={() => onDiffModeChange(true)}
+            >
+              Explain a diff
+            </button>
+          </div>
+        </div>
+
         <div className={`input-row ${error ? "input-row-error" : ""}`}>
           <span className="input-prefix">url&nbsp;&gt;</span>
           <input
@@ -1192,10 +1306,41 @@ function InputView({
             aria-label="GitHub repository URL"
             aria-invalid={!!error}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onSubmit();
+              if (e.key === "Enter" && !diffMode) onSubmit();
             }}
           />
         </div>
+
+        {diffMode && (
+          <div className="diff-refs-row">
+            <div className={`input-row ${error ? "input-row-error" : ""}`}>
+              <span className="input-prefix">base&nbsp;&gt;</span>
+              <input
+                type="text"
+                value={baseRef}
+                onChange={(e) => onBaseRefChange(e.target.value)}
+                placeholder="e.g. v1.0.0 or main"
+                aria-label="Base ref (tag, branch, or commit SHA)"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onSubmitDiff();
+                }}
+              />
+            </div>
+            <div className={`input-row ${error ? "input-row-error" : ""}`}>
+              <span className="input-prefix">head&nbsp;&gt;</span>
+              <input
+                type="text"
+                value={headRef}
+                onChange={(e) => onHeadRefChange(e.target.value)}
+                placeholder="e.g. v1.1.0 or a commit SHA"
+                aria-label="Head ref (tag, branch, or commit SHA)"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onSubmitDiff();
+                }}
+              />
+            </div>
+          </div>
+        )}
         {error && <p className="input-error">{error}</p>}
 
         <div className="chip-row">
@@ -1237,16 +1382,74 @@ function InputView({
         </div>
 
         <div className="actions">
-          <button className="btn btn-primary" onClick={onSubmit}>
-            Generate walkthrough
+          <button className="btn btn-primary" onClick={diffMode ? onSubmitDiff : onSubmit}>
+            {diffMode ? "Explain the diff" : "Generate walkthrough"}
           </button>
         </div>
 
-        <WalkthroughHistory entries={history} onOpen={onOpenHistory} />
+        {!diffMode && <WalkthroughHistory entries={history} onOpen={onOpenHistory} />}
       </div>
 
       <div className="input-visual">
         <TerminalPreview />
+      </div>
+    </div>
+  );
+}
+
+// Diff mode's result screen — deliberately simpler than ResultView: a diff
+// explanation is always exactly one section, so there's no section sidebar,
+// no diagram, no walkthrough-history persistence to wire up.
+function DiffResultView({
+  result,
+  onReset,
+}: {
+  result: DiffPipelineResult;
+  onReset: () => void;
+}) {
+  return (
+    <div className="panel">
+      <div className="result-header">
+        <div>
+          <p className="eyebrow">// {result.repo}</p>
+          <h2>
+            {result.baseRef} → {result.headRef}
+          </h2>
+          <p className="lede">
+            {result.filesChanged} of {result.totalFilesChanged} changed files narrated
+            {result.totalFilesChanged > result.filesChanged ? " (largest changes prioritized)" : ""}.
+          </p>
+        </div>
+        <div className="result-actions">
+          <button className="btn" onClick={onReset} type="button">
+            ← Explain another
+          </button>
+        </div>
+      </div>
+
+      <div className="result-grid">
+        <div className="video-col">
+          <div className="video-wrap">
+            {result.video.video_url ? (
+              <video
+                className="video"
+                src={result.video.video_url}
+                controls
+                playsInline
+                aria-label={`Diff explanation: ${result.section.title}`}
+              />
+            ) : (
+              <div className="video video-placeholder" role="status">
+                Still rendering…
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="sections-col">
+          <h3>{result.section.title}</h3>
+          <p>{result.section.script}</p>
+        </div>
       </div>
     </div>
   );
@@ -1329,7 +1532,18 @@ function splitSentences(text: string): string[] {
 // Full-screen, click-to-zoom architecture-diagram viewer. Reachable at any
 // point via the floating "Diagram" button, the toolbar, the thumbnail, and the
 // picture-in-picture overlay. Esc or a backdrop click closes it.
-function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
+//
+// Renders the flat diagramImageUrl PNG only — the persistent DiagramPanel
+// (see App.tsx's ResultView) is the one place that does live SVG rendering
+// and per-node highlighting, so this stays a simple zoomable copy rather
+// than a second rendering system.
+function DiagramModal({
+  imageUrl,
+  onClose,
+}: {
+  imageUrl: string | null;
+  onClose: () => void;
+}) {
   const [zoom, setZoom] = useState(false);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1357,14 +1571,16 @@ function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
             >
               {zoom ? "Fit" : "Zoom"}
             </button>
-            <a
-              className="diagram-modal-btn"
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open ↗
-            </a>
+            {imageUrl && (
+              <a
+                className="diagram-modal-btn"
+                href={imageUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open ↗
+              </a>
+            )}
             <button
               className="diagram-modal-btn diagram-modal-close"
               onClick={onClose}
@@ -1378,7 +1594,7 @@ function DiagramModal({ url, onClose }: { url: string; onClose: () => void }) {
         <div
           className={`diagram-modal-body ${zoom ? "diagram-modal-body-zoom" : ""}`}
         >
-          <img src={url} alt="Architecture diagram" />
+          <img src={imageUrl ?? ""} alt="Architecture diagram" />
         </div>
       </div>
     </div>
@@ -1488,6 +1704,8 @@ function ResultView({
   const [pipDiagram, setPipDiagram] = useState(false);
   const [diagramOpen, setDiagramOpen] = useState(false);
   const sentences = section ? splitSentences(section.script) : [];
+  const hasDiagram = Boolean(result.mermaidDiagram || result.diagramImageUrl);
+  const activeNodeIds = section?.node_ids ?? [];
 
   // Reset caption + progress when the section (and its video) changes.
   useEffect(() => {
@@ -1619,14 +1837,14 @@ function ResultView({
               </div>
             )}
 
-            {video?.video_url && pipDiagram && result.diagramImageUrl && (
+            {video?.video_url && pipDiagram && hasDiagram && (
               <button
                 className="video-pip"
                 onClick={() => setDiagramOpen(true)}
                 type="button"
                 title="Click to enlarge the diagram"
               >
-                <img src={result.diagramImageUrl} alt="Architecture diagram" />
+                <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
               </button>
             )}
           </div>
@@ -1641,7 +1859,7 @@ function ResultView({
               >
                 CC · Subtitles {captionsOn ? "on" : "off"}
               </button>
-              {result.diagramImageUrl && (
+              {hasDiagram && (
                 <>
                   <button
                     className={`vtool ${pipDiagram ? "vtool-on" : ""}`}
@@ -1689,18 +1907,21 @@ function ResultView({
             </div>
           )}
 
-          {result.diagramImageUrl && (
+          {hasDiagram && (
             <button
               className="diagram-thumb"
               onClick={() => setDiagramOpen(true)}
               type="button"
               title="Click to view the architecture diagram"
             >
-              <img src={result.diagramImageUrl} alt="Architecture diagram" />
+              <img src={result.diagramImageUrl ?? ""} alt="Architecture diagram" />
               <span className="diagram-thumb-hint">
                 ⛶ Architecture diagram — click to enlarge (viewable any time)
               </span>
             </button>
+          )}
+          {activeNodeIds.length > 0 && section?.caption && (
+            <p className="diagram-thumb-caption">📍 {section.caption}</p>
           )}
         </div>
 
@@ -1749,7 +1970,7 @@ function ResultView({
       </div>
 
       {/* Always-available diagram access, floating over the results screen. */}
-      {result.diagramImageUrl && (
+      {hasDiagram && (
         <button
           className="diagram-fab"
           onClick={() => setDiagramOpen(true)}
@@ -1759,9 +1980,9 @@ function ResultView({
           ◇ Diagram
         </button>
       )}
-      {diagramOpen && result.diagramImageUrl && (
+      {diagramOpen && hasDiagram && (
         <DiagramModal
-          url={result.diagramImageUrl}
+          imageUrl={result.diagramImageUrl}
           onClose={() => setDiagramOpen(false)}
         />
       )}

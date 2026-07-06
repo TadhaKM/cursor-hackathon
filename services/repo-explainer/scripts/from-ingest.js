@@ -2,7 +2,7 @@
 //
 // Pending until Person 1's /ingest is live. Once it is, set INGEST_URL and run:
 //   INGEST_URL=http://localhost:8000/repo-summary-input \
-//   GEMINI_API_KEY=... \
+//   GEMINI_API_KEY=sk-... \
 //   node scripts/from-ingest.js https://github.com/owner/repo
 //
 // It fetches real ingestion output, feeds it straight into explainRepo, and

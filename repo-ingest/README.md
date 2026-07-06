@@ -18,8 +18,19 @@ Request body:
 { "repo_url": "https://github.com/owner/repo" }
 ```
 
-`repo_url` accepts a full GitHub URL (with or without `.git` / trailing slash)
-or the `owner/repo` shorthand.
+`repo_url` accepts a full GitHub URL (`https://github.com/owner/repo`), a
+scheme-less one (`github.com/owner/repo`), or the `owner/repo` shorthand.
+
+### `GET /repo-summary-input?url=...`
+
+Same as `POST /ingest`, in query-string form — a convenience alias so the repo
+URL can be passed as `?url=https://github.com/owner/repo`.
+
+### `POST /diff`
+
+Request body `{ "repo_url", "base", "head" }` — returns a summary of the files
+that changed between two refs (branches/tags/SHAs), for the explainer's
+"narrate what changed" (diff) mode.
 
 ### `GET /health`
 

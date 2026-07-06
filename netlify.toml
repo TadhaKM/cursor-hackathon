@@ -1,0 +1,21 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[build.environment]
+  # Node 18+ so the chat function's native fetch() is available.
+  NODE_VERSION = "20"
+
+# Route /api/chat to the Netlify Function so VITE_CHAT_URL=/api/chat works.
+# Must come before the SPA fallback so it isn't swallowed by /*.
+[[redirects]]
+  from = "/api/chat"
+  to = "/.netlify/functions/chat"
+  status = 200
+
+# SPA fallback — serve index.html for client-side routes / deep links.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

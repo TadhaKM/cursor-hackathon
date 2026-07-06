@@ -196,11 +196,11 @@ export function ChatPanel({
 
       <p className="chat-mode">
         {mode === "live"
-          ? backend === "explain" || (backend === "auto" && chatBackend() === "gemini-rag")
-            ? "● Gemini (RAG)"
+          ? backend === "explain" || (backend === "auto" && chatBackend() === "explain")
+            ? "● Gemini (Person 2 RAG)"
             : chatBackend() === "gemini"
               ? "● Gemini"
-              : "● Gemini (RAG)"
+              : "● Gemini (Person 2 RAG)"
           : "○ mock chat"}
       </p>
     </>

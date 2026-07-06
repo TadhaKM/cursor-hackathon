@@ -1,5 +1,5 @@
 // Full-pipeline smoke test — hits the real Gemini API.
-// Usage: GEMINI_API_KEY=... node scripts/smoke.js [path-to-ingestion.json]
+// Usage: GEMINI_API_KEY=sk-... node scripts/smoke.js [path-to-ingestion.json]
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";

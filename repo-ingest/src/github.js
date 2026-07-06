@@ -66,7 +66,18 @@ export function parseRepoUrl(repoUrl) {
   let owner;
   let repo;
 
-  const trimmed = repoUrl.trim();
+  let trimmed = repoUrl.trim();
+
+  // Accept scheme-less URLs like "github.com/owner/repo" or
+  // "www.github.com/owner/repo" (a dotted host before the first slash, with no
+  // scheme) by assuming https. Plain "owner/repo" shorthand has no dot, so it's
+  // left for the shorthand path below.
+  if (
+    !/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) &&
+    /^[^/\s]+\.[^/\s]+\//.test(trimmed)
+  ) {
+    trimmed = "https://" + trimmed;
+  }
 
   // Try to parse as a full URL first.
   try {
@@ -261,6 +272,46 @@ export async function getRecentCommits(octokit, { owner, repo, count = 10 }) {
     }));
   } catch (err) {
     if (err?.status === 409) return []; // Empty repository.
+    throw translateError(err, { owner, repo });
+  }
+}
+
+/**
+ * Fetch the diff between two refs (branches, tags, or commit SHAs) via
+ * GitHub's compare API. Returns the raw comparison — file-level trimming
+ * happens in diff.js, matching how ingest.js trims getTree()'s raw output.
+ */
+export async function getCompare(octokit, { owner, repo, base, head }) {
+  try {
+    const { data } = await octokit.repos.compareCommitsWithBasehead({
+      owner,
+      repo,
+      basehead: `${base}...${head}`,
+    });
+    return {
+      ahead_by: data.ahead_by,
+      behind_by: data.behind_by,
+      total_commits: data.total_commits,
+      commits: (data.commits || []).map((c) => ({
+        message: c.commit?.message || "",
+        date: c.commit?.author?.date || c.commit?.committer?.date || "",
+      })),
+      files: (data.files || []).map((f) => ({
+        path: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch || null, // null for binary/too-large files
+      })),
+    };
+  } catch (err) {
+    if (err?.status === 404) {
+      throw new GitHubError(
+        `Could not compare '${base}...${head}' on '${owner}/${repo}' — check that both refs exist.`,
+        { status: 404, code: "NOT_FOUND" }
+      );
+    }
     throw translateError(err, { owner, repo });
   }
 }

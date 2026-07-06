@@ -36,54 +36,14 @@ export function classifyGeminiError(err) {
     status === 403;
   if (isAuth) return { statusCode: 500, kind: "auth" };
 
-  const isRateLimit =
-    err instanceof OpenAI.RateLimitError ||
-    status === 429 ||
-    msg.includes("rate limit") ||
-    msg.includes("resource_exhausted") ||
-    msg.includes("quota");
-  if (isRateLimit) return { statusCode: 429, kind: "rate_limit" };
-
-  // 503 / "model is overloaded" is transient — worth backing off and retrying.
-  const isOverloaded =
-    status === 503 ||
-    msg.includes("overloaded") ||
-    msg.includes("unavailable") ||
-    msg.includes("try again");
-  if (isOverloaded) return { statusCode: 503, kind: "overloaded" };
+  if (status === 429) return { statusCode: 429, kind: "rate_limit" };
 
   return { statusCode: 502, kind: "upstream" };
 }
 
-// Pull a "how long to wait" hint out of a 429 error. Tries the standard
-// Retry-After header, then the RetryInfo/"retry in Xs" hints Gemini puts in the
-// body/message. Falls back to escalating backoff.
-export function retryDelayMsFor(err, attempt, capMs = 35000) {
-  const header =
-    err?.headers?.["retry-after"] ?? err?.response?.headers?.["retry-after"];
-  const headerSec = Number.parseFloat(header);
-  if (Number.isFinite(headerSec) && headerSec > 0) {
-    return Math.min(headerSec * 1000, capMs);
-  }
-
-  const text = `${err?.message ?? ""} ${
-    typeof err?.error === "object" ? JSON.stringify(err.error) : err?.error ?? ""
-  }`;
-  const match =
-    text.match(/retry(?:Delay)?["\s:]*?([\d.]+)\s*s/i) ||
-    text.match(/retry in\s*([\d.]+)\s*s/i);
-  if (match) {
-    const sec = Number.parseFloat(match[1]);
-    if (Number.isFinite(sec) && sec > 0) return Math.min(sec * 1000 + 500, capMs);
-  }
-
-  // No hint: escalate 5s, 12s, 24s, … capped.
-  return Math.min(5000 * 2 ** (attempt - 1) + 1000, capMs);
-}
-
-// Single OpenAI-compatible client pointed at the Gemini API.
-// The SDK's built-in `maxRetries` is disabled; we handle retries ourselves so
-// the semantics ("1 retry per call") are explicit and easy to reason about.
+// Single OpenAI-compatible client pointed at Google AI Studio (Gemini). The
+// SDK's built-in retries are disabled; we handle them ourselves so the
+// semantics are explicit.
 let client = null;
 function getClient() {
   if (!client) {
@@ -101,17 +61,28 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// How long to wait after a 429 before retrying — prefer the provider's
+// Retry-After / "retry in Ns" hint, otherwise assume the per-minute quota
+// bucket. Capped so a single call can't hang too long.
+function rateLimitDelayMs(err) {
+  const header =
+    err?.response?.headers?.get?.("retry-after") ??
+    err?.headers?.get?.("retry-after");
+  let seconds = header ? Number(header) : NaN;
+  if (!Number.isFinite(seconds)) {
+    const m = String(err?.message ?? "").match(/retry in ([\d.]+)\s*s/i);
+    if (m) seconds = Number(m[1]);
+  }
+  if (!Number.isFinite(seconds)) seconds = 30;
+  return Math.min(Math.max(seconds, 5), 35) * 1000 + 500;
+}
+
 /**
- * Run a single chat completion against Gemini with an explicit timeout and a
- * bounded number of retries.
- *
- * @param {object} opts
- * @param {string} opts.system        System prompt.
- * @param {string} opts.user          User prompt.
- * @param {boolean} [opts.json]       Ask the model for a JSON object response.
- * @param {number} [opts.temperature] Sampling temperature.
- * @param {string} [opts.label]       Human label used in error messages/logs.
- * @returns {Promise<string>} The assistant message content.
+ * Run a single chat completion against Gemini with an explicit timeout and
+ * bounded, kind-aware retries:
+ *   - 429 (rate limit): wait for the quota bucket to refill, then retry.
+ *   - 503/502/500 (overload): short exponential backoff, then retry.
+ *   - anything else: one generic retry.
  */
 export async function chat({
   system,
@@ -120,21 +91,21 @@ export async function chat({
   temperature = 0.4,
   label = "gemini-call",
 }) {
+  const genericAttempts = config.maxRetries + 1;
   let lastError;
-  // Two independent budgets: transient errors (timeout/upstream) get the small
-  // maxRetries budget; rate-limit (429) gets its own, larger budget since a
-  // multi-call /explain run routinely trips free-tier quotas and recovers once
-  // the window resets.
-  let transientLeft = config.maxRetries;
-  let rateLimitLeft = config.rateLimitMaxRetries;
-  let rateLimitAttempt = 0;
+  let genericAttempt = 0;
+  let rateLimitRetries = 0;
+  let overloadRetries = 0;
+  const maxRateLimitRetries = 2;
+  const maxOverloadRetries = 4;
 
-  for (;;) {
+  while (true) {
     try {
       const response = await getClient().chat.completions.create(
         {
           model: config.model,
           temperature,
+          max_tokens: config.maxTokens,
           messages: [
             { role: "system", content: system },
             { role: "user", content: user },
@@ -151,39 +122,52 @@ export async function chat({
       return content.trim();
     } catch (err) {
       lastError = err;
+      const status = err?.status ?? err?.response?.status;
       const { kind } = classifyGeminiError(err);
-      console.warn(`[${label}] attempt failed (${kind}): ${err?.message ?? err}`);
 
-      // An auth failure won't fix itself on retry — fail fast and log loudly.
+      // Auth won't fix itself on retry — fail fast and log loudly.
       if (kind === "auth") {
         console.error(
-          `[${label}] AUTH ERROR — check GEMINI_API_KEY / GEMINI_BASE_URL. ${err?.message ?? err}`
+          `[${label}] AUTH ERROR from Gemini — check GEMINI_API_KEY / GEMINI_BASE_URL. ${err?.message ?? err}`
         );
         break;
       }
 
-      // Rate-limit (429) and transient overload (503) both back off and retry
-      // out of the same generous budget, honoring any server-provided delay.
-      if (kind === "rate_limit" || kind === "overloaded") {
-        if (rateLimitLeft <= 0) break;
-        rateLimitLeft -= 1;
-        rateLimitAttempt += 1;
-        const delay = retryDelayMsFor(
-          err,
-          rateLimitAttempt,
-          config.rateLimitMaxDelayMs
-        );
+      // Rate limited: wait for the quota bucket to refill, then retry.
+      if (status === 429 && rateLimitRetries < maxRateLimitRetries) {
+        rateLimitRetries++;
+        const waitMs = rateLimitDelayMs(err);
         console.warn(
-          `[${label}] ${kind} — waiting ${Math.round(delay / 1000)}s then retrying (${rateLimitLeft} retries left).`
+          `[${label}] rate limited (429) — waiting ${Math.round(
+            waitMs / 1000
+          )}s then retrying (${rateLimitRetries}/${maxRateLimitRetries})…`
         );
-        await sleep(delay);
+        await sleep(waitMs);
         continue;
       }
 
-      // timeout / upstream: small linear backoff.
-      if (transientLeft <= 0) break;
-      transientLeft -= 1;
-      await sleep(750 * (config.maxRetries - transientLeft));
+      // Transient overload: short exponential backoff, then retry.
+      if (
+        (status === 503 || status === 502 || status === 500) &&
+        overloadRetries < maxOverloadRetries
+      ) {
+        overloadRetries++;
+        const waitMs = Math.min(1500 * 2 ** (overloadRetries - 1), 12000);
+        console.warn(
+          `[${label}] Gemini overloaded (${status}) — retrying in ${Math.round(
+            waitMs / 1000
+          )}s (${overloadRetries}/${maxOverloadRetries})…`
+        );
+        await sleep(waitMs);
+        continue;
+      }
+
+      genericAttempt++;
+      console.warn(
+        `[${label}] attempt ${genericAttempt} failed: ${err?.message ?? err}`
+      );
+      if (genericAttempt >= genericAttempts) break;
+      await sleep(750 * genericAttempt);
     }
   }
 
@@ -195,9 +179,7 @@ export async function chat({
       : kind === "auth"
         ? `Gemini authentication failed for call "${label}". Check GEMINI_API_KEY.`
         : kind === "rate_limit"
-          ? `Gemini call "${label}" was rate limited (429) and did not recover after ${config.rateLimitMaxRetries} retries: ${message}`
-          : kind === "overloaded"
-            ? `Gemini call "${label}" hit a transient overload (503) and did not recover after ${config.rateLimitMaxRetries} retries: ${message}`
-            : `Gemini call "${label}" failed: ${message}`;
+          ? `Gemini call "${label}" is rate limited (429) — free-tier quota exhausted. Wait a minute or use a key with more quota.`
+          : `Gemini call "${label}" failed: ${message}`;
   throw new GeminiError(readable, { statusCode, kind, cause: lastError });
 }

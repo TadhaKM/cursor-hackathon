@@ -67,6 +67,13 @@ test("URL with .git and trailing slash is normalized", () => {
 test("owner/repo shorthand works", () => {
   assert.deepEqual(parseRepoUrl("a/b"), { owner: "a", repo: "b" });
 });
+test("scheme-less github.com URL is accepted", () => {
+  assert.deepEqual(parseRepoUrl("github.com/expressjs/express"), {
+    owner: "expressjs",
+    repo: "express",
+  });
+  assert.deepEqual(parseRepoUrl("www.github.com/a/b"), { owner: "a", repo: "b" });
+});
 test("malformed URL throws INVALID_URL", () => {
   assert.throws(() => parseRepoUrl("not a url"), (e) => e.code === "INVALID_URL");
 });

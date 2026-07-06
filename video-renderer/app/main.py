@@ -1,3 +1,18 @@
+"""video-renderer — turns narration sections into HeyGen talking-avatar videos
+and renders the mermaid diagram to a PNG (via Kroki). Stage 3 of 3.
+
+    GET  /health
+    POST /render            { sections, mermaid_diagram? } -> { job_id, ... }
+    GET  /render/{job_id}   -> job status + video_urls + diagram_image_url
+    GET  /avatars, /voices  -> HeyGen catalogs (for picking avatar/voice IDs)
+
+Renders are async: /render returns immediately with a job_id, HeyGen jobs run
+in the background (submitted in parallel, ~1-3 min each), and the frontend polls
+/render/{job_id} until status is ready/partial/failed. Job state is in-memory
+(app/store.py), so run a single instance. Set MOCK_VIDEO=true to skip HeyGen and
+return instant placeholder videos.
+"""
+
 import asyncio
 import uuid
 
@@ -67,6 +82,18 @@ async def voices():
         return await heygen.list_voices(client)
 
 
+# Public domain sample clip returned for every section in mock mode.
+MOCK_VIDEO_URL = (
+    "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
+)
+
+
+async def _mock_render_section(title: str) -> dict:
+    """Instant stand-in for heygen.render_section — no HeyGen call, no credits."""
+    await asyncio.sleep(2)
+    return {"title": title, "status": "completed", "video_url": MOCK_VIDEO_URL, "error": None}
+
+
 async def _run_job(job_id: str, req: RenderRequest) -> None:
     try:
         await _run_job_inner(job_id, req)
@@ -86,8 +113,12 @@ async def _run_job_inner(job_id: str, req: RenderRequest) -> None:
 
     async with httpx.AsyncClient() as client:
         # Submit/poll every section in parallel — don't wait on one before
-        # starting the next, since HeyGen renders take 1-3 min each.
-        render_tasks = [heygen.render_section(s.title, s.script, client) for s in req.sections]
+        # starting the next, since HeyGen renders take 1-3 min each. In mock
+        # mode, skip HeyGen and return instant placeholder videos.
+        if config.MOCK_VIDEO:
+            render_tasks = [_mock_render_section(s.title) for s in req.sections]
+        else:
+            render_tasks = [heygen.render_section(s.title, s.script, client) for s in req.sections]
 
         diagram_task = (
             diagram.render_mermaid_to_png(req.mermaid_diagram, client)

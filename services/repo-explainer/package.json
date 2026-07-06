@@ -1,7 +1,7 @@
 {
   "name": "repo-explainer",
   "version": "1.0.0",
-  "description": "Turns repo ingestion output into an architecture summary, a spoken narration script, and a Mermaid diagram using Google Gemini.",
+  "description": "Turns repo ingestion output into an architecture summary, a spoken narration script, and a Mermaid diagram using Alibaba Qwen (Model Studio).",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
@@ -15,6 +15,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

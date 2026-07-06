@@ -1,10 +1,12 @@
 import { chat } from "./geminiClient.js";
+import { config } from "./config.js";
 import { normalizeIngestion, renderContext, hasUsableContent } from "./ingestion.js";
 import {
   buildArchitectureMessages,
   buildNarrationMessages,
   buildMermaidMessages,
   buildSectionResizeMessages,
+  buildDiagramHighlightMessages,
   normalizePersona,
   SECTION_WORD_BOUNDS,
 } from "./prompts.js";
@@ -13,7 +15,6 @@ import {
   parseNarration,
   classifySectionLength,
   withCounts,
-  extractFirstJsonValue,
 } from "./narration.js";
 
 // For each section outside the acceptable word range, make ONE targeted resize
@@ -37,18 +38,13 @@ export async function refineSectionLengths(sections, persona, chatFn = chat) {
         temperature: 0.5,
         label: `narration-resize:${verb}`,
       });
-      const stripped = stripFences(raw);
-      let parsed;
-      try {
-        parsed = JSON.parse(stripped);
-      } catch {
-        const candidate = extractFirstJsonValue(stripped);
-        if (!candidate) throw new Error("resize response was not valid JSON");
-        parsed = JSON.parse(candidate);
-      }
+      const parsed = JSON.parse(stripFences(raw));
       const next = withCounts({
         title: parsed.title ?? section.title,
         script: parsed.script ?? section.script,
+        // Resizing only changes length, not what the section is about —
+        // the resize prompt doesn't regenerate this, so keep the original.
+        caption: section.caption,
       });
 
       if (classifySectionLength(next.word_count)) {
@@ -72,6 +68,42 @@ function stripFences(text) {
   const s = String(text).trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   return fence ? fence[1].trim() : s;
+}
+
+// Pull every node id actually defined in the diagram (the short id before a
+// [ ] / ( ) / { } label) so we can reject any id the model hallucinates in the
+// highlight-mapping step below.
+function extractNodeIds(mermaidDiagram) {
+  const ids = new Set();
+  const re = /\b([A-Za-z][A-Za-z0-9_]*)\s*[\[\(\{]/g;
+  let match;
+  while ((match = re.exec(mermaidDiagram))) ids.add(match[1]);
+  return ids;
+}
+
+// Maps each narration section to the diagram node ids it discusses, so the
+// frontend can highlight the relevant node(s) while that section plays.
+// Best-effort: any failure just leaves every section with an empty array
+// rather than failing the whole /explain request.
+async function mapDiagramHighlights(sections, mermaidDiagram) {
+  if (!mermaidDiagram) return sections.map((s) => ({ ...s, node_ids: [] }));
+
+  const validIds = extractNodeIds(mermaidDiagram);
+  try {
+    const msgs = buildDiagramHighlightMessages(sections, mermaidDiagram);
+    const raw = await chat({ ...msgs, json: true, temperature: 0.2, label: "diagram-highlights" });
+    const parsed = JSON.parse(stripFences(raw));
+    const byTitle = new Map(
+      (parsed.highlights || []).map((h) => [
+        h.title,
+        (h.node_ids || []).filter((id) => validIds.has(id)),
+      ])
+    );
+    return sections.map((s) => ({ ...s, node_ids: byTitle.get(s.title) || [] }));
+  } catch (err) {
+    console.warn(`[diagram-highlights] mapping failed (${err.message}); leaving sections unhighlighted.`);
+    return sections.map((s) => ({ ...s, node_ids: [] }));
+  }
 }
 
 async function generateMermaid(context, architectureSummary) {
@@ -105,8 +137,7 @@ async function generateMermaid(context, architectureSummary) {
 }
 
 /**
- * Runs the full explanation pipeline: architecture summary -> narration script
- * -> mermaid diagram (three sequential Gemini calls).
+
  *
  * @param {object} payload Ingestion JSON, optionally with a `persona` field.
  * @param {object} [opts]
@@ -147,15 +178,23 @@ export async function explainRepo(payload = {}, opts = {}) {
   });
   const narrationScript = parseNarration(narrationRaw);
   // Enforce per-section word bounds with one targeted resize retry each.
-  narrationScript.sections = await refineSectionLengths(
-    narrationScript.sections,
-    persona
-  );
+  // Skipped by default (config.refineNarration) since each resize is an extra
+  // rate-limited LLM call; sections are still hard-capped downstream.
+  if (config.refineNarration) {
+    narrationScript.sections = await refineSectionLengths(
+      narrationScript.sections,
+      persona
+    );
+  }
 
   // 3) Mermaid diagram (best-effort; may be null).
   const mermaidDiagram = includeDiagram
     ? await generateMermaid(context, architectureSummary)
     : null;
+
+  // 4) Map sections to the diagram nodes they discuss (best-effort; needs
+  // the diagram, so it can only run once step 3 is done).
+  narrationScript.sections = await mapDiagramHighlights(narrationScript.sections, mermaidDiagram);
 
   return {
     architecture_summary: architectureSummary,

@@ -32,6 +32,14 @@ export interface IngestResult {
 export interface ExplainSection {
   title: string;
   script: string;
+  // Short (5-8 word) label summarizing the section, e.g. "Handles user
+  // login and sessions" — for a caption near the diagram, not the video.
+  caption?: string | null;
+  // Mermaid diagram node ids (from mermaid_diagram) this section discusses,
+  // e.g. ["B"] for a node declared as `B[Auth Module]` — used to highlight
+  // the relevant node(s) while this section plays. Empty for general
+  // sections not tied to a specific node.
+  node_ids?: string[];
 }
 
 export interface ExplainResult {
@@ -67,9 +75,62 @@ export interface PipelineResult {
   sections: ExplainSection[];
   videos: VideoSection[];
   diagramImageUrl: string | null;
+  // Raw mermaid source (not the rendered PNG) — needed to render the
+  // diagram client-side so individual nodes can be highlighted per section.
   mermaidDiagram: string | null;
+  // Backend-provided node highlights (from repo-explainer's per-section
+  // node_ids, see ExplainSection) — takes priority over DiagramPanel's
+  // client-side title-matching heuristic in resolveDiagramHighlights()
+  // when present, since this is grounded in the actual narration script
+  // rather than a label-text guess.
   diagramHighlights?: DiagramHighlight[];
   ingestion: IngestResult;
+}
+
+// ---------------------------------------------------------------------
+// Diff mode — narrate what changed between two refs instead of a full repo
+// walkthrough:
+//   POST {INGEST}/diff          -> DiffResult
+//   POST {EXPLAIN}/explain-diff -> ExplainDiffResult (always exactly 1 section)
+//   POST {RENDER}/render        -> same render/poll path as the main pipeline
+// ---------------------------------------------------------------------
+
+export interface DiffFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string;
+}
+
+export interface DiffResult {
+  repo_url: string;
+  base_ref: string;
+  head_ref: string;
+  total_commits: number;
+  commits: { message: string; date: string }[];
+  files: DiffFile[];
+  meta: {
+    owner: string;
+    repo: string;
+    total_files_changed: number;
+    files_included: number;
+    truncated: boolean;
+  };
+}
+
+export interface ExplainDiffResult {
+  narration_script: { sections: ExplainSection[] };
+}
+
+export interface DiffPipelineResult {
+  repo: string;
+  baseRef: string;
+  headRef: string;
+  section: ExplainSection;
+  video: VideoSection;
+  filesChanged: number;
+  totalFilesChanged: number;
 }
 
 const INGEST_URL = import.meta.env.VITE_INGEST_URL as string | undefined;
@@ -87,7 +148,7 @@ export function backendMode(): "live" | "mock" {
 // GEMINI_API_KEY never ships to the browser:
 //   POST {VITE_CHAT_URL}   Body: { context_type, question, ingestion }
 //   -> { answer: string, sources: string[] }
-// Pipeline /explain still uses VITE_EXPLAIN_URL (the Gemini explainer service).
+// Pipeline /explain still uses VITE_EXPLAIN_URL (Person 2's Gemini service).
 // ---------------------------------------------------------------------
 
 const CHAT_URL = import.meta.env.VITE_CHAT_URL as string | undefined;
@@ -118,25 +179,25 @@ export function chatMode(): "live" | "mock" {
   return CHAT_URL || EXPLAIN_URL ? "live" : "mock";
 }
 
-export function chatBackend(): "gemini" | "gemini-rag" | "mock" {
+export function chatBackend(): "gemini" | "explain" | "mock" {
   if (CHAT_URL) return "gemini";
-  if (EXPLAIN_URL) return "gemini-rag";
+  if (EXPLAIN_URL) return "explain";
   return "mock";
 }
 
 // Synthetic "ingestion" payload for the tool-level FAQ assistant (no repo
 // has been processed yet, or the question isn't about a specific repo).
 export const TOOL_DOCS: IngestResult = {
-  repo_url: "repo-to-video",
+  repo_url: "redio",
   file_tree: "",
   readme: [
-    "# repo → video",
+    "# Redio",
     "",
     "A tool that turns a public GitHub repo into a short onboarding walkthrough video.",
     "",
     "## Pipeline",
     "1. Ingest — reads the file tree, README, key files, package manifest, and recent commits from the pasted GitHub URL. Public repos only; private repos need OAuth, which isn't wired up.",
-    "2. Explain — an LLM (Google Gemini) turns that structure into an architecture summary and a spoken narration script, split into sections, plus an optional mermaid diagram.",
+    "2. Explain — an LLM (Gemini) turns that structure into an architecture summary and a spoken narration script, split into sections, plus an optional mermaid diagram.",
     "3. Render — each section becomes its own short video via HeyGen, so nobody sits through one long video to find the part they need.",
     "",
     "## Modes",
@@ -219,7 +280,7 @@ export async function askQuestion(
     return parseChatResponse(res);
   }
 
-  // The explainer's RAG chat — same ingestion payload, Gemini + TF-IDF over key files
+  // Person 2's RAG chat — same ingestion payload, Gemini + TF-IDF over key files
   if (EXPLAIN_URL && contextType === "repo") {
     const res = await fetch(`${EXPLAIN_URL}/chat`, {
       method: "POST",
@@ -236,10 +297,26 @@ export async function askQuestion(
 function mockAnswer(_ingestion: IngestResult, question: string): Promise<ChatAnswer> {
   return Promise.resolve({
     answer:
-      `Chat is in mock mode — set \`VITE_EXPLAIN_URL\` (Gemini RAG) or \`VITE_CHAT_URL\` (Gemini proxy).\n\n` +
+      `Chat is in mock mode — set \`VITE_EXPLAIN_URL\` (Person 2's Gemini RAG) or \`VITE_CHAT_URL\` (Gemini proxy).\n\n` +
       `You asked: "${question}"`,
     sources: [],
   });
+}
+
+// Bridges repo-explainer's per-section node_ids (grounded in the actual
+// narration, via a dedicated Gemini call) into DiagramPanel's
+// DiagramHighlight[] shape, which otherwise only ever gets populated by
+// resolveDiagramHighlights()'s client-side title-matching heuristic.
+// DiagramHighlight is one node per section; a section with multiple
+// node_ids just contributes its first (the primary node it discusses).
+function sectionsToDiagramHighlights(sections: ExplainSection[]): DiagramHighlight[] {
+  const highlights: DiagramHighlight[] = [];
+  sections.forEach((s, i) => {
+    const nodeId = s.node_ids?.[0];
+    if (!nodeId) return;
+    highlights.push({ section_index: i, node_id: nodeId, caption: s.caption ?? s.title });
+  });
+  return highlights;
 }
 
 export async function runPipeline(
@@ -294,7 +371,68 @@ export async function runPipeline(
     videos: final.videos,
     diagramImageUrl: final.diagram_image_url ?? null,
     mermaidDiagram: explainRes.mermaid_diagram,
+    diagramHighlights: sectionsToDiagramHighlights(explainRes.narration_script.sections),
     ingestion: ingestRes,
+  };
+}
+
+export async function runDiffPipeline(
+  repoUrl: string,
+  baseRef: string,
+  headRef: string,
+  onStage: (e: StageEvent) => void,
+  signal?: AbortSignal
+): Promise<DiffPipelineResult> {
+  if (!USING_REAL_BACKEND) {
+    return runMockDiffPipeline(repoUrl, baseRef, headRef, onStage, signal);
+  }
+
+  // 1. Diff — reuses the "ingest" stage slot, same UI progress step.
+  const diffRes = await postJSON<DiffResult>(
+    `${INGEST_URL}/diff`,
+    { repo_url: repoUrl, base_ref: baseRef, head_ref: headRef },
+    signal
+  );
+  onStage({ stage: "ingest", ok: true });
+
+  // 2. Explain the diff — always exactly one section (see diffExplain.js).
+  const explainRes = await postJSON<ExplainDiffResult>(
+    `${EXPLAIN_URL}/explain-diff`,
+    diffRes,
+    signal
+  );
+  onStage({ stage: "explain", ok: true });
+
+  const section = explainRes.narration_script.sections[0];
+  if (!section) {
+    onStage({ stage: "explain", ok: false });
+    throw new Error("Diff narration returned no section");
+  }
+
+  // 3. Render — same single render/poll path as the main pipeline, just one
+  // section and no diagram.
+  const kickoff = await postJSON<RenderResult>(
+    `${RENDER_URL}/render`,
+    { sections: [section] },
+    signal
+  );
+
+  const final = await pollRender(kickoff, signal);
+
+  if (final.status === "failed" || !final.videos[0]) {
+    onStage({ stage: "render", ok: false });
+    throw new Error("Video rendering failed");
+  }
+  onStage({ stage: "render", ok: true });
+
+  return {
+    repo: repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || repoUrl,
+    baseRef,
+    headRef,
+    section,
+    video: final.videos[0],
+    filesChanged: diffRes.meta.files_included,
+    totalFilesChanged: diffRes.meta.total_files_changed,
   };
 }
 
@@ -397,10 +535,16 @@ function wait(ms: number, signal?: AbortSignal) {
 // so the UI is fully testable before any real backend exists.
 // ---------------------------------------------------------------------
 
+const MOCK_MERMAID_DIAGRAM = `graph TD
+  A[Client] --> B[API Layer]
+  B --> C[Auth Module]
+  B --> D[Core Logic]
+  D --> E[(Database)]`;
+
 const MOCK_SECTIONS: ExplainSection[] = [
-  { title: "Overview", script: "This project is a modular service with a clear entry point and a small set of core routes." },
-  { title: "Auth Module", script: "Authentication is handled in a dedicated module, separating login and token logic from the rest of the app." },
-  { title: "API Layer", script: "The API layer routes requests into core logic and talks to the database through a thin data-access layer." },
+  { title: "Overview", script: "This project is a modular service with a clear entry point and a small set of core routes.", caption: null, node_ids: [] },
+  { title: "Auth Module", script: "Authentication is handled in a dedicated module, separating login and token logic from the rest of the app.", caption: "Handles login and session tokens", node_ids: ["C"] },
+  { title: "API Layer", script: "The API layer routes requests into core logic and talks to the database through a thin data-access layer.", caption: "Routes requests to core logic", node_ids: ["B", "D"] },
 ];
 
 async function runMockPipeline(
@@ -418,12 +562,6 @@ async function runMockPipeline(
   onStage({ stage: "render", ok: true });
 
   const name = repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || "example/demo-repo";
-  const mockMermaid = [
-    "graph TD",
-    "  A[Overview] --> B[Auth Module]",
-    "  B --> C[API Layer]",
-    "  C --> D[Database]",
-  ].join("\n");
 
   return {
     repo: name,
@@ -438,7 +576,10 @@ async function runMockPipeline(
       status: "completed" as const,
     })),
     diagramImageUrl: null,
-    mermaidDiagram: mockMermaid,
+    // MOCK_MERMAID_DIAGRAM's node lettering (A-E) matches MOCK_SECTIONS'
+    // node_ids above — keep them in sync if either changes.
+    mermaidDiagram: MOCK_MERMAID_DIAGRAM,
+    diagramHighlights: sectionsToDiagramHighlights(MOCK_SECTIONS),
     ingestion: {
       repo_url: name,
       file_tree:
@@ -448,5 +589,44 @@ async function runMockPipeline(
       recent_commits: [{ message: "fix auth middleware", date: new Date().toISOString() }],
       package_manifest: '{"dependencies":{"express":"^4.18.0","react":"^19.0.0"}}',
     },
+  };
+}
+
+async function runMockDiffPipeline(
+  repoUrl: string,
+  baseRef: string,
+  headRef: string,
+  onStage: (e: StageEvent) => void,
+  signal?: AbortSignal
+): Promise<DiffPipelineResult> {
+  await wait(1000, signal);
+  onStage({ stage: "ingest", ok: true });
+
+  await wait(1500, signal);
+  onStage({ stage: "explain", ok: true });
+
+  await wait(2000, signal);
+  onStage({ stage: "render", ok: true });
+
+  const name = repoUrl.replace(/\/$/, "").split("/").slice(-2).join("/") || "example/demo-repo";
+  const section: ExplainSection = {
+    title: "What Changed",
+    script:
+      `This is a mock diff narration, shown because no backend URLs are configured yet. Between ${baseRef} and ${headRef}, ` +
+      `a handful of files changed. In a real run, this would call out actual behavior changes and why they likely matter to someone coming back to this code after time away — not just a list of files.`,
+  };
+
+  return {
+    repo: name,
+    baseRef,
+    headRef,
+    section,
+    video: {
+      title: section.title,
+      video_url: "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+      status: "completed",
+    },
+    filesChanged: 3,
+    totalFilesChanged: 3,
   };
 }

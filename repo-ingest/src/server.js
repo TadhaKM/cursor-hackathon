@@ -1,6 +1,21 @@
+/**
+ * repo-ingest — turns a GitHub repo into a compact, token-budgeted JSON
+ * snapshot (file tree, README, key files, recent commits, manifest) for the
+ * rest of the pipeline. Stage 1 of 3.
+ *
+ *   GET  /health
+ *   POST /ingest              { repo_url }                  -> ingestion JSON
+ *   GET  /repo-summary-input  ?url=...                      -> same (query form)
+ *   POST /diff                { repo_url, base, head }      -> changed-files summary
+ *
+ * Responses are cached in-memory (TTLCache) so repeated calls during a demo
+ * don't re-hit the GitHub API. Set GITHUB_TOKEN for higher rate limits and
+ * private-repo access.
+ */
 import "dotenv/config";
 import express from "express";
 import { ingestRepo, GitHubError } from "./ingest.js";
+import { getDiff } from "./diff.js";
 import { TTLCache } from "./cache.js";
 
 const app = express();
@@ -30,6 +45,8 @@ const CODE_TO_STATUS = {
   FORBIDDEN: 403,
   UNAUTHORIZED: 401,
   API_ERROR: 502,
+  INVALID_REFS: 400,
+  EMPTY_DIFF: 400,
 };
 
 app.get("/health", (_req, res) => {
@@ -91,6 +108,42 @@ app.post("/ingest", (req, res) => {
 app.get("/repo-summary-input", (req, res) => {
   const repoUrl = req.query.url || req.query.repo_url;
   return handleIngest(repoUrl, res);
+});
+
+// Diff mode: POST /diff { repo_url, base_ref, head_ref }
+// Returns a trimmed diff (changed files + patches, prioritized by size) for
+// repo-explainer's diff-narration endpoint to consume, instead of a full
+// repo snapshot.
+app.post("/diff", async (req, res) => {
+  const { repo_url: repoUrl, base_ref: baseRef, head_ref: headRef } = req.body || {};
+
+  const cacheKey = `diff:${repoUrl}:${baseRef}...${headRef}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    console.log(`[cache HIT]  ${cacheKey}`);
+    return res.json({ ...cached, cached: true });
+  }
+
+  try {
+    console.log(`[cache MISS] ${cacheKey} (fetching diff from GitHub)`);
+    const result = await getDiff(repoUrl, baseRef, headRef);
+    cache.set(cacheKey, result);
+    return res.json({ ...result, cached: false });
+  } catch (err) {
+    if (err instanceof GitHubError) {
+      const status = CODE_TO_STATUS[err.code] || 502;
+      const body = { error: err.message, code: err.code };
+      if (err.details && Object.keys(err.details).length > 0) {
+        Object.assign(body, err.details);
+      }
+      return res.status(status).json(body);
+    }
+    console.error("Unexpected error during diff:", err);
+    return res.status(500).json({
+      error: "Internal server error while fetching diff.",
+      code: "INTERNAL_ERROR",
+    });
+  }
 });
 
 const port = Number(process.env.PORT) || 3000;

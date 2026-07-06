@@ -17,7 +17,7 @@ _RECT_LABEL_RE = re.compile(r"\[([^\[\]]+)\]")
 # Characters mermaid tolerates in an *unquoted* rectangle label. Anything else
 # (parentheses, @, /, :, &, etc.) must be wrapped in quotes or the Kroki parse
 # fails. Space, period, comma and hyphen are common and safe, so labels made of
-# only these are left alone (this also avoids quoting subgraph titles).
+# only these are left alone.
 _SAFE_LABEL_RE = re.compile(r"^[\w .,\-]+$")
 
 
