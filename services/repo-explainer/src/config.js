@@ -35,6 +35,19 @@ export const config = {
   // section. Off by default to conserve rate-limited quota; set
   // REFINE_NARRATION=true to re-enable.
   refineNarration: (env.REFINE_NARRATION ?? "false").toLowerCase() === "true",
+
+  // --- RAG /chat ---
+  // Defaults to OpenRouter's free auto-router ("openrouter/free"), which picks
+  // an available free model per request — so chat keeps working even when a
+  // specific free model gets deprecated mid-event (this happens often).
+  // Override with OPENROUTER_CHAT_MODEL; OPENROUTER_CHAT_FALLBACK_MODEL is tried
+  // once if the primary model is unavailable.
+  chatModel: first(env.OPENROUTER_CHAT_MODEL) ?? "openrouter/free",
+  chatFallbackModel: first(env.OPENROUTER_CHAT_FALLBACK_MODEL) ?? "",
+  chatTimeoutMs: int(first(env.OPENROUTER_CHAT_TIMEOUT_MS), 20000),
+  // Sent as HTTP-Referer / X-Title for OpenRouter dashboard attribution.
+  appReferer: first(env.OPENROUTER_APP_REFERER) ?? "https://redio.app",
+  appTitle: first(env.OPENROUTER_APP_TITLE) ?? "Redio",
 };
 
 export function assertApiKey() {

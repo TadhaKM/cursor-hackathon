@@ -11,6 +11,7 @@ import {
 import { normalizePersona, SECTION_CHAR_HARDCAP } from "../src/prompts.js";
 import { parseNarration, capScript, countWords } from "../src/narration.js";
 import { buildChunks, retrieve } from "../src/rag.js";
+import { setChunks, getChunks, hasChunks, _clear } from "../src/chunkStore.js";
 import { classifySectionLength, withCounts } from "../src/narration.js";
 import { refineSectionLengths } from "../src/explain.js";
 import { classifyGeminiError } from "../src/geminiClient.js";
@@ -132,6 +133,44 @@ test("retrieve returns empty when nothing matches", () => {
     key_files: [{ path: "a.js", content: "export const x = 1;" }],
   });
   assert.deepEqual(retrieve(chunks, "zzzznomatch quxblah"), []);
+});
+
+test("buildChunks includes file tree + README-header chunks with the right shape", () => {
+  const chunks = buildChunks({
+    repo_url: "https://github.com/o/r",
+    file_tree: "src/server.js\nsrc/auth.js",
+    readme: "# Title\nintro\n\n## Setup\nrun it\n\n## Usage\nuse it",
+    key_files: [{ path: "src/server.js", content: "function boot() {}" }],
+  });
+  // Every chunk has the documented shape.
+  for (const c of chunks) {
+    assert.deepEqual(Object.keys(c).sort(), [
+      "chunk_index",
+      "content",
+      "path",
+      "repo_url",
+    ]);
+    assert.equal(c.repo_url, "https://github.com/o/r");
+  }
+  assert.ok(chunks.some((c) => c.path === "(file tree)"));
+  // README split by header -> at least the 3 sections.
+  assert.ok(chunks.filter((c) => c.path === "README").length >= 3);
+  // chunk_index is unique + contiguous.
+  assert.deepEqual(
+    chunks.map((c) => c.chunk_index),
+    chunks.map((_, i) => i)
+  );
+});
+
+test("chunkStore round-trips chunks by repo_url with LRU-ish overwrite", () => {
+  _clear();
+  assert.equal(hasChunks("repo-a"), false);
+  setChunks("repo-a", [{ repo_url: "repo-a", path: "x", content: "y", chunk_index: 0 }]);
+  assert.equal(hasChunks("repo-a"), true);
+  assert.equal(getChunks("repo-a").length, 1);
+  setChunks("repo-a", []); // overwrite
+  assert.deepEqual(getChunks("repo-a"), []);
+  assert.equal(getChunks("nope"), null);
 });
 
 test("classifySectionLength flags short/long/ok sections", () => {

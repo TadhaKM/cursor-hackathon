@@ -58,7 +58,7 @@ build/start commands from `render.yaml`.)
 ## 2. Frontend on Vercel
 
 1. Vercel → **New Project** → import this repo. Framework: **Vite**
-   (build `npm run build`, output `dist`). `vercel.json` wires the
+   (build `npm run build`, output `dist`). `` wires the
    `/api/chat` serverless function automatically.
 2. **Settings → Environment Variables** (set for Production):
 
